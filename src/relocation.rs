@@ -249,39 +249,16 @@ fn relocate_build(target: Option<PathBuf>) -> Result<String, String> {
     let target = target.ok_or("--relocate-build needs an empty destination folder")?;
     let source = current_roots()?;
     ensure_idle(&source)?;
-    let destination =
+    let moved =
         data_location::migrate_build_current(&source, &target, |message| eprintln!("{message}"))?;
-    println!("{}", destination.build.display());
-    let mut note = destination.build.display().to_string();
-    for old in data_location::build_sources(&source) {
-        let removed = if old == source.build {
-            remove_contents(&old)
-        } else {
-            match fs::remove_dir_all(&old) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                other => other,
-            }
-        };
-        if let Err(e) = removed {
-            eprintln!("Could not remove the old {}: {e}", old.display());
-            note.push('\n');
-            note.push_str(&old.display().to_string());
-        }
+    println!("{}", moved.roots.build.display());
+    let mut note = moved.roots.build.display().to_string();
+    for (old, error) in moved.remove_old() {
+        eprintln!("Could not remove the old {}: {error}", old.display());
+        note.push('\n');
+        note.push_str(&old.display().to_string());
     }
     Ok(note)
-}
-
-/// Empties a build folder of its own, keeping the folder: it may be one the player made.
-fn remove_contents(folder: &Path) -> std::io::Result<()> {
-    for entry in fs::read_dir(folder)? {
-        let path = entry?.path();
-        if fs::symlink_metadata(&path)?.is_dir() {
-            fs::remove_dir_all(&path)?;
-        } else {
-            fs::remove_file(&path)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

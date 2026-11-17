@@ -525,7 +525,8 @@ fn build_move_takes_only_build_entries_from_the_launcher_folder() {
     }
     let before = snapshot(&f.temp.0.join("source"));
     let target = f.target();
-    let roots = migrate_build(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
+    let moved = migrate_build(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
+    let roots = moved.roots.clone();
     assert_eq!(
         roots,
         Roots {
@@ -549,24 +550,42 @@ fn build_move_takes_only_build_entries_from_the_launcher_folder() {
     // The move copies; the old build files are the worker's to remove.
     assert_eq!(snapshot(&f.temp.0.join("source")), before);
     assert_eq!(
-        build_sources(&f.source),
-        BUILD_ENTRIES
-            .iter()
-            .map(|name| f.source.launcher.join(name))
-            .collect::<Vec<_>>()
+        moved.old,
+        OldBuild::Entries(
+            BUILD_ENTRIES
+                .iter()
+                .map(|name| f.source.launcher.join(name))
+                .collect()
+        )
     );
+    assert!(moved.remove_old().is_empty());
+    for name in BUILD_ENTRIES {
+        assert!(!f.source.launcher.join(name).exists(), "{name}");
+    }
+    // Everything else in the launcher folder is kept.
+    assert_eq!(
+        fs::read(f.source.launcher.join("accounts.json")).unwrap(),
+        b"{\"accounts\":[]}"
+    );
+    assert!(f.source.launcher.join("cache/compiled.bin").is_file());
+    assert!(f.source.launcher.join("empty").is_dir());
 }
 
 #[test]
 fn build_move_takes_a_separate_build_folder_whole() {
     let f = Fixture::new("build");
     let target = f.target();
-    let roots = migrate_build(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
-    assert_eq!(roots.build, target);
-    assert_eq!(roots.launcher, f.source.launcher);
+    let moved = migrate_build(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
+    assert_eq!(moved.roots.build, target);
+    assert_eq!(moved.roots.launcher, f.source.launcher);
     assert_eq!(snapshot(&f.source.build), snapshot(&target));
-    assert_eq!(build_sources(&f.source), vec![f.source.build.clone()]);
+    assert_eq!(moved.old, OldBuild::Contents(f.source.build.clone()));
     f.unchanged();
+    assert!(moved.remove_old().is_empty());
+    // The folder itself stays, emptied; the launcher's and the game's data are untouched.
+    assert_eq!(fs::read_dir(&f.source.build).unwrap().count(), 0);
+    assert!(f.source.launcher.join("accounts.json").is_file());
+    assert!(f.source.game.join("saves/dummy/level.dat").is_file());
 }
 
 #[test]
@@ -586,4 +605,97 @@ fn build_move_refuses_a_destination_in_the_data_or_not_empty() {
     assert!(error.contains("empty folder"), "{error}");
     assert_eq!(fs::read(f.target().join("sentinel")).unwrap(), b"keep");
     f.old_pointer();
+}
+
+/// Links `link` to the folder `to`: a symlink on Unix, a junction (no privilege needed) on
+/// Windows.
+fn link_folder(to: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(to, link).unwrap();
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(link)
+            .arg(to)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J {}", link.display());
+    }
+}
+
+/// The launcher folder spelled through a link above it (a `~/.local/share` on another disk)
+/// and the build folder spelled through its real path are one folder: the move and the
+/// cleanup both take only the build entries, never the launcher's own data.
+#[test]
+fn build_cleanup_keeps_launcher_data_under_another_spelling() {
+    let temp = Temp::new();
+    let real = temp.0.join("disk");
+    fs::create_dir_all(real.join("launcher")).unwrap();
+    fs::create_dir_all(temp.0.join("game")).unwrap();
+    link_folder(&real, &temp.0.join("share"));
+    let source = Roots {
+        launcher: temp.0.join("share/launcher"),
+        game: temp.0.join("game"),
+        build: real.join("launcher"),
+    };
+    let sentinels = ["accounts.json", "settings.json", "versions/26.3/client.bin"];
+    for name in sentinels
+        .iter()
+        .chain(&["rust/bin/rustc", "native/target/x.rlib"])
+    {
+        let path = real.join("launcher").join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, name).unwrap();
+    }
+    // As spelled, the two look like separate folders: deciding from these would empty the
+    // whole launcher folder.
+    assert!(!build_is_launcher(&source));
+    let bootstrap = temp.0.join("bootstrap/location.json");
+    let target = temp.0.join("builds");
+
+    let moved = migrate_build(&source, &target, &bootstrap, |_| {}).unwrap();
+    assert!(matches!(moved.old, OldBuild::Entries(_)), "{:?}", moved.old);
+    assert!(!target.join("accounts.json").exists());
+    assert!(target.join("rust/bin/rustc").is_file());
+    assert!(moved.remove_old().is_empty());
+    for name in sentinels {
+        assert_eq!(
+            fs::read(real.join("launcher").join(name)).unwrap(),
+            name.as_bytes(),
+            "{name}"
+        );
+    }
+    assert!(!real.join("launcher/rust").exists());
+    assert!(!real.join("launcher/native").exists());
+}
+
+/// A portable pointer (`SUNRISE_LAUNCHER_LOCATION_FILE`) kept among the build files would be
+/// removed with them after the move, and the next start would forget it: refused up front.
+#[test]
+fn build_move_refuses_a_pointer_among_the_build_files() {
+    for (build, pointer) in [
+        ("build", "build/location.json"),
+        ("launcher", "launcher/rust/location.json"),
+    ] {
+        let f = Fixture::new(build);
+        let bootstrap = f.temp.0.join("source").join(pointer);
+        fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
+        fs::write(&bootstrap, &f.pointer).unwrap();
+        let error = migrate_build(&f.source, &f.target(), &bootstrap, |_| {}).unwrap_err();
+        assert!(error.contains("location file"), "{error}");
+        assert_eq!(fs::read(&bootstrap).unwrap(), f.pointer);
+        assert_eq!(resolve_at(&bootstrap).unwrap(), Some(f.source.clone()));
+        assert!(!f.target().exists());
+    }
+    // Beside the build entries, in the launcher folder itself, it is kept and the move goes on.
+    let f = Fixture::new("launcher");
+    let bootstrap = f.source.launcher.join("location.json");
+    fs::write(&bootstrap, &f.pointer).unwrap();
+    let moved = migrate_build(&f.source, &f.target(), &bootstrap, |_| {}).unwrap();
+    assert!(moved.remove_old().is_empty());
+    assert_eq!(resolve_at(&bootstrap).unwrap(), Some(moved.roots));
 }
