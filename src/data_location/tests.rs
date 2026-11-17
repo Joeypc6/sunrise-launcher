@@ -510,3 +510,80 @@ fn unit_tests_never_resolve_the_real_profile() {
         );
     }
 }
+
+#[test]
+fn build_move_takes_only_build_entries_from_the_launcher_folder() {
+    let f = Fixture::new("launcher");
+    for name in [
+        "rust/bin/rustc",
+        "cargo/config.toml",
+        "native/target/x.rlib",
+    ] {
+        let path = f.source.launcher.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, name).unwrap();
+    }
+    let before = snapshot(&f.temp.0.join("source"));
+    let target = f.target();
+    let roots = migrate_build(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
+    assert_eq!(
+        roots,
+        Roots {
+            launcher: f.source.launcher.clone(),
+            game: f.source.game.clone(),
+            build: target.clone(),
+        }
+    );
+    assert_eq!(resolve_at(&f.bootstrap).unwrap(), Some(roots));
+    for name in [
+        "rust/bin/rustc",
+        "cargo/config.toml",
+        "native/target/x.rlib",
+    ] {
+        assert_eq!(fs::read(target.join(name)).unwrap(), name.as_bytes());
+    }
+    // Launcher data that is not a build file stays, and is not copied.
+    assert!(!target.join("accounts.json").exists());
+    assert!(!target.join("cache").exists());
+    assert!(!target.join(".relocation-staging").exists());
+    // The move copies; the old build files are the worker's to remove.
+    assert_eq!(snapshot(&f.temp.0.join("source")), before);
+    assert_eq!(
+        build_sources(&f.source),
+        BUILD_ENTRIES
+            .iter()
+            .map(|name| f.source.launcher.join(name))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn build_move_takes_a_separate_build_folder_whole() {
+    let f = Fixture::new("build");
+    let target = f.target();
+    let roots = migrate_build(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
+    assert_eq!(roots.build, target);
+    assert_eq!(roots.launcher, f.source.launcher);
+    assert_eq!(snapshot(&f.source.build), snapshot(&target));
+    assert_eq!(build_sources(&f.source), vec![f.source.build.clone()]);
+    f.unchanged();
+}
+
+#[test]
+fn build_move_refuses_a_destination_in_the_data_or_not_empty() {
+    let f = Fixture::new("launcher");
+    for target in [
+        f.source.launcher.join("builds"),
+        f.source.game.join("builds"),
+    ] {
+        let error = migrate_build(&f.source, &target, &f.bootstrap, |_| {}).unwrap_err();
+        assert!(error.contains("overlaps"), "{error}");
+        f.old_pointer();
+    }
+    fs::create_dir(f.target()).unwrap();
+    fs::write(f.target().join("sentinel"), b"keep").unwrap();
+    let error = migrate_build(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap_err();
+    assert!(error.contains("empty folder"), "{error}");
+    assert_eq!(fs::read(f.target().join("sentinel")).unwrap(), b"keep");
+    f.old_pointer();
+}

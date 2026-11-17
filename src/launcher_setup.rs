@@ -117,6 +117,7 @@ impl Launcher {
             location_error: location_page::startup_error(),
             location_note: location_page::startup_note(),
             location_target: None,
+            location_build: false,
             args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),
             args_focused: false,
             args_focus: cx.focus_handle().tab_index(0).tab_stop(true),

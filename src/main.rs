@@ -269,6 +269,8 @@ struct Launcher {
     location_note: Option<String>,
     /// The empty folder picked for a data move, until it is confirmed or cancelled.
     location_target: Option<std::path::PathBuf>,
+    /// The confirmation is for moving only the build folder to `location_target`.
+    location_build: bool,
     settings: Settings,
     /// The last failed settings write, kept across page changes until a save succeeds.
     settings_save_error: Option<String>,

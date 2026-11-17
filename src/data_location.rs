@@ -367,18 +367,7 @@ fn migrate_locked(
             ));
         }
     }
-    if target.exists()
-        && (!target.is_dir()
-            || fs::read_dir(&target)
-                .map_err(|e| problem(&target, e))?
-                .next()
-                .is_some())
-    {
-        return Err(format!(
-            "Destination {} must be an empty folder",
-            target.display()
-        ));
-    }
+    require_empty(&target)?;
     let destination = layout(&source, &target);
     tool_safe(&destination.build)?;
     fs::create_dir_all(&target).map_err(|e| problem(&target, e))?;
@@ -410,6 +399,156 @@ fn migrate_locked(
         Ok(destination)
     })();
     result.map_err(|e: String| format!("{e}. Original data was kept. Partial copies may remain in {}; choose an empty folder to retry", target.display()))
+}
+
+/// What the launcher keeps in its build folder ([`crate::backend::build_dir`]): the Rust
+/// toolchain, its Cargo home, native mod builds and their scratch. When the build folder is the
+/// launcher folder itself (the default), a build-folder move takes only these.
+pub const BUILD_ENTRIES: [&str; 5] = ["rust", "cargo", "native", "tmp", "managed-native-target"];
+
+/// The folders a build-folder move copies from `source`: the build folder itself when it has
+/// one of its own, or only [`BUILD_ENTRIES`] when it is the launcher folder.
+pub fn build_sources(source: &Roots) -> Vec<PathBuf> {
+    if build_is_launcher(source) {
+        BUILD_ENTRIES
+            .iter()
+            .map(|name| source.build.join(name))
+            .collect()
+    } else {
+        vec![source.build.clone()]
+    }
+}
+
+fn build_is_launcher(roots: &Roots) -> bool {
+    within(&roots.build, &roots.launcher) && within(&roots.launcher, &roots.build)
+}
+
+/// Like [`migrate_current`], but moves only the build folder: to `target` itself, an empty
+/// folder, leaving the launcher's and the game's data where they are.
+pub fn migrate_build_current(
+    source: &Roots,
+    target: &Path,
+    progress: impl FnMut(&str),
+) -> Result<Roots> {
+    if has_override() {
+        return Err(
+            "Unset SUNRISE_LAUNCHER_HOME and SUNRISE_HOME before moving build files".into(),
+        );
+    }
+    let bootstrap = bootstrap_path()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let lease = loop {
+        match lock_at(&bootstrap, true) {
+            Ok(lease) => break lease,
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => return Err(e),
+        }
+    };
+    migrate_build_locked(source, target, &bootstrap, progress, &lease)
+}
+
+/// [`migrate_build_current`] for an explicit bootstrap; tests use it.
+pub fn migrate_build(
+    source: &Roots,
+    target: &Path,
+    bootstrap: &Path,
+    progress: impl FnMut(&str),
+) -> Result<Roots> {
+    let lease = lock_at(bootstrap, true)?;
+    migrate_build_locked(source, target, bootstrap, progress, &lease)
+}
+
+fn migrate_build_locked(
+    source: &Roots,
+    target: &Path,
+    bootstrap: &Path,
+    mut progress: impl FnMut(&str),
+    _lease: &File,
+) -> Result<Roots> {
+    let source = validate_roots(source)?;
+    if let Some(current) = resolve_at(bootstrap)? {
+        if current != source {
+            return Err(
+                "Data location changed while waiting; restart the launcher and retry the move"
+                    .into(),
+            );
+        }
+    }
+    let target = checked_path(target)?;
+    for root in [
+        &source.launcher,
+        &source.game,
+        &source.build,
+        &pointer_path(bootstrap)?,
+    ] {
+        if overlaps(root, &target) {
+            return Err(format!(
+                "Destination {} overlaps existing data or its bootstrap {}",
+                target.display(),
+                root.display()
+            ));
+        }
+    }
+    require_empty(&target)?;
+    tool_safe(&target)?;
+    fs::create_dir_all(&target).map_err(|e| problem(&target, e))?;
+    let stage = target.join(".relocation-staging");
+    let whole = !build_is_launcher(&source);
+    let result = (|| {
+        private_dir(&stage)?;
+        progress("Copying and verifying build data");
+        if whole {
+            // The build folder's own entries, so they land in `target` itself.
+            for entry in fs::read_dir(&source.build).map_err(|e| problem(&source.build, e))? {
+                let entry = entry.map_err(|e| problem(&source.build, e))?;
+                copy_tree(
+                    &entry.path(),
+                    &stage.join(entry.file_name()),
+                    bootstrap,
+                    &mut progress,
+                )?;
+            }
+        } else {
+            for from in build_sources(&source) {
+                if from.exists() {
+                    let name = from.file_name().ok_or("A build entry needs a name")?;
+                    copy_tree(&from, &stage.join(name), bootstrap, &mut progress)?;
+                }
+            }
+        }
+        for entry in fs::read_dir(&stage).map_err(|e| problem(&stage, e))? {
+            let entry = entry.map_err(|e| problem(&stage, e))?;
+            let to = target.join(entry.file_name());
+            fs::rename(entry.path(), &to).map_err(|e| problem(&to, e))?;
+        }
+        fs::remove_dir(&stage).map_err(|e| problem(&stage, e))?;
+        sync_dir(&target)?;
+        progress("Committing data location");
+        let destination = Roots {
+            launcher: source.launcher.clone(),
+            game: source.game.clone(),
+            build: target.clone(),
+        };
+        commit(bootstrap, &destination)?;
+        Ok(destination)
+    })();
+    result.map_err(|e: String| format!("{e}. The build folder was not changed. Partial copies may remain in {}; choose an empty folder to retry", target.display()))
+}
+
+fn require_empty(target: &Path) -> Result<()> {
+    if target.exists()
+        && (!target.is_dir()
+            || fs::read_dir(target)
+                .map_err(|e| problem(target, e))?
+                .next()
+                .is_some())
+    {
+        return Err(format!(
+            "Destination {} must be an empty folder",
+            target.display()
+        ));
+    }
+    Ok(())
 }
 
 fn layout(source: &Roots, target: &Path) -> Roots {

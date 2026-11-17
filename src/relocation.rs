@@ -157,55 +157,48 @@ fn ensure_idle(source: &Roots) -> Result<(), String> {
 }
 
 /// Handled before normal startup, so this process owns no shared data-location lease.
+/// `--relocate-data FOLDER` moves all data; `--relocate-build FOLDER` only the build folder.
 pub fn run_worker() -> Option<i32> {
     let mut args = std::env::args_os().skip(1);
-    if args.next().as_deref() != Some(std::ffi::OsStr::new("--relocate-data")) {
-        return None;
-    }
+    let build_only = match args.next() {
+        Some(flag) if flag == "--relocate-data" => false,
+        Some(flag) if flag == "--relocate-build" => true,
+        _ => return None,
+    };
     let target = args.next().map(PathBuf::from);
     let restart = args.next().is_some_and(|a| a == "--restart");
-    let result = (|| {
-        let target = target.ok_or("--relocate-data needs an empty destination folder")?;
-        data_location::validate()?;
-        let source = Roots {
-            launcher: backend::data_dir(),
-            game: backend::game_home(),
-            build: backend::build_dir(),
-        };
-        ensure_idle(&source)?;
-        let backup = format!(
-            "{}\n{}\n{}",
-            source.launcher.display(),
-            source.game.display(),
-            source.build.display()
-        );
-        let destination = data_location::migrate_current_with_prepare(
-            &source,
-            &target,
-            |message| eprintln!("{message}"),
-            |stage, target| {
-                ensure_idle(&source)?;
-                prepare_paths(stage, &source, target)
-            },
-        )?;
-        println!("{}", destination.launcher.display());
-        Ok::<_, String>(backup)
-    })();
+    let result = if build_only {
+        relocate_build(target)
+    } else {
+        relocate_data(target)
+    };
     if let Err(error) = &result {
-        eprintln!("Data was not relocated: {error}");
+        if build_only {
+            eprintln!("Build files were not moved: {error}");
+        } else {
+            eprintln!("Data was not relocated: {error}");
+        }
     }
     let code = i32::from(result.is_err());
     if restart {
         let mut command = process::command(backend::exe_path());
         command
             .env_remove("SUNRISE_RELOCATION_ERROR")
-            .env_remove("SUNRISE_RELOCATION_BACKUP");
-        match &result {
-            Ok(backup) => {
-                command.env("SUNRISE_RELOCATION_BACKUP", backup);
+            .env_remove("SUNRISE_RELOCATION_BACKUP")
+            .env_remove("SUNRISE_BUILD_RELOCATION_ERROR")
+            .env_remove("SUNRISE_BUILD_RELOCATED");
+        match (&result, build_only) {
+            (Ok(note), false) => {
+                command.env("SUNRISE_RELOCATION_BACKUP", note);
             }
-            Err(error) => {
+            (Err(error), false) => {
                 command.env("SUNRISE_RELOCATION_ERROR", error);
+            }
+            (Ok(note), true) => {
+                command.env("SUNRISE_BUILD_RELOCATED", note);
+            }
+            (Err(error), true) => {
+                command.env("SUNRISE_BUILD_RELOCATION_ERROR", error);
             }
         }
         if let Err(e) = command.spawn() {
@@ -214,6 +207,81 @@ pub fn run_worker() -> Option<i32> {
         }
     }
     Some(code)
+}
+
+fn current_roots() -> Result<Roots, String> {
+    data_location::validate()?;
+    Ok(Roots {
+        launcher: backend::data_dir(),
+        game: backend::game_home(),
+        build: backend::build_dir(),
+    })
+}
+
+/// Moves all data; returns the old folders, which are kept as recovery copies.
+fn relocate_data(target: Option<PathBuf>) -> Result<String, String> {
+    let target = target.ok_or("--relocate-data needs an empty destination folder")?;
+    let source = current_roots()?;
+    ensure_idle(&source)?;
+    let backup = format!(
+        "{}\n{}\n{}",
+        source.launcher.display(),
+        source.game.display(),
+        source.build.display()
+    );
+    let destination = data_location::migrate_current_with_prepare(
+        &source,
+        &target,
+        |message| eprintln!("{message}"),
+        |stage, target| {
+            ensure_idle(&source)?;
+            prepare_paths(stage, &source, target)
+        },
+    )?;
+    println!("{}", destination.launcher.display());
+    Ok(backup)
+}
+
+/// Moves the build folder; returns the new one. Build files are caches the launcher can make
+/// again, so once the new folder is verified and selected the old copies are removed, which is
+/// what frees the space; any that can't be are named after the new folder, one per line.
+fn relocate_build(target: Option<PathBuf>) -> Result<String, String> {
+    let target = target.ok_or("--relocate-build needs an empty destination folder")?;
+    let source = current_roots()?;
+    ensure_idle(&source)?;
+    let destination =
+        data_location::migrate_build_current(&source, &target, |message| eprintln!("{message}"))?;
+    println!("{}", destination.build.display());
+    let mut note = destination.build.display().to_string();
+    for old in data_location::build_sources(&source) {
+        let removed = if old == source.build {
+            remove_contents(&old)
+        } else {
+            match fs::remove_dir_all(&old) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                other => other,
+            }
+        };
+        if let Err(e) = removed {
+            eprintln!("Could not remove the old {}: {e}", old.display());
+            note.push('\n');
+            note.push_str(&old.display().to_string());
+        }
+    }
+    Ok(note)
+}
+
+/// Empties a build folder of its own, keeping the folder: it may be one the player made.
+fn remove_contents(folder: &Path) -> std::io::Result<()> {
+    for entry in fs::read_dir(folder)? {
+        let path = entry?.path();
+        if fs::symlink_metadata(&path)?.is_dir() {
+            fs::remove_dir_all(&path)?;
+        } else {
+            fs::remove_file(&path)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

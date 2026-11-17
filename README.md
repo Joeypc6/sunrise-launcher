@@ -75,6 +75,16 @@ The opening, then Play ([clip](docs/opening.webm)):
   absolute pointer file for portable installations. Nonempty `SUNRISE_LAUNCHER_HOME` and `SUNRISE_HOME`
   still override their respective roots; remove these overrides before using Move. A missing destination
   fails explicitly instead of silently creating empty data in the default location.
+- **Move build files to another drive**: Settings → Build folder → Move… (or
+  `sunrise-launcher --relocate-build <empty folder>`) moves only the build files — the managed Rust
+  toolchain and its Cargo home, native mod builds and their scratch (`rust`, `cargo`, `native`,
+  `tmp`, `managed-native-target`), which take many gigabytes — to an empty folder, and records it as
+  the build root in `location.json`; settings, accounts, worlds, instances and installed versions
+  stay where they are. It runs offline like the data move, with the same checks (idle launcher, no
+  links, no overlap with the data folders, ASCII without spaces on Windows). Once the copy is
+  verified and selected, the old build files are removed, since the launcher can make them again;
+  any it cannot remove are named when it reopens. A later data move takes a build folder of its own
+  along, into the destination's `build`.
 - **Play**: prepares resources as `PLAY.txt` describes (your launcher's 26.3 install, the
   26.3 server jar from that version's own json, and Java 25) and copies its sounds from your
   launcher's asset store (`sunrise-prepare sounds`; a launcher install without them only
