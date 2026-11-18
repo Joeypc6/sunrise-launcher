@@ -126,22 +126,79 @@ pub fn validate() -> Result<()> {
     configured_roots().map(|_| ())
 }
 
-/// Run before any launcher path is used. A broken location never ends the process: it is
-/// recorded for Settings, and the default folders stand in until the player retries or keeps
-/// them. The returned text is also [`startup_error`].
+/// The shared lease could not be taken for a reason other than a move holding it (an
+/// unwritable config folder): [`enter`] records it, and [`startup`] reports it in Settings.
+static LEASE_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+/// The shared data-location lease, as [`shared_lease_at`] finds it.
+#[derive(Debug)]
+pub enum Lease {
+    Held(File),
+    /// A data or build move holds it exclusively: its folders are being copied or cleaned up.
+    Busy(String),
+    /// The lock file could not be opened or locked for another reason.
+    Unavailable(String),
+}
+
+/// The shared lease every launcher holds for its lifetime, so no move starts under it and none
+/// is under way while it is held.
+pub fn shared_lease_at(bootstrap: &Path) -> Lease {
+    match try_lock_at(bootstrap, false) {
+        Ok(Ok(file)) => Lease::Held(file),
+        Ok(Err(busy)) => Lease::Busy(busy),
+        Err(error) => Lease::Unavailable(error),
+    }
+}
+
+/// The first thing a launcher does with its data, before anything resolves or reads a root
+/// (the earlier launcher's carry-over included): take the shared lease, which it keeps for the
+/// life of the process. `Err` when a data or build move holds the lease: the caller must stop
+/// here, without reading the roots, since they are being copied or removed. The move's worker
+/// opens the launcher again when it is done.
+pub fn enter() -> std::result::Result<(), String> {
+    if overridden("SUNRISE_LAUNCHER_HOME") && overridden("SUNRISE_HOME") {
+        return Ok(());
+    }
+    let lease = match bootstrap_path() {
+        Ok(bootstrap) => shared_lease_at(&bootstrap),
+        Err(error) => Lease::Unavailable(error),
+    };
+    match lease {
+        Lease::Held(file) => {
+            *STARTUP_LEASE
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(file);
+        }
+        Lease::Busy(busy) => {
+            return Err(format!(
+                "Sunrise is moving its data or build files ({busy}). The launcher opens again \
+                 when the move is finished."
+            ))
+        }
+        Lease::Unavailable(error) => {
+            *LEASE_ERROR
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error);
+        }
+    }
+    Ok(())
+}
+
+/// Run after [`enter`] and before any launcher path is used. A broken location never ends the
+/// process: it is recorded for Settings, and the default folders stand in until the player
+/// retries or keeps them. The returned text is also [`startup_error`].
 pub fn startup() -> Option<String> {
     let mut problems = Vec::new();
     if let Err(error) = configured_roots() {
         FORCE_DEFAULT.store(true, Ordering::Release);
         problems.push(open_error(&error));
     }
-    match acquire_startup_lock() {
-        Ok(lease) => {
-            *STARTUP_LEASE
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = lease;
-        }
-        Err(error) => problems.push(error),
+    if let Some(error) = LEASE_ERROR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+    {
+        problems.push(error);
     }
     let error = (!problems.is_empty()).then(|| problems.join("\n"));
     remember_startup_error(error.clone());
@@ -170,6 +227,9 @@ pub fn retry() -> Result<()> {
             *STARTUP_LEASE
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = lease;
+            *LEASE_ERROR
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         }
         Err(error) => {
             remember_startup_error(Some(error.clone()));
@@ -259,6 +319,12 @@ pub fn acquire_lock_at(bootstrap: &Path) -> Result<File> {
 }
 
 fn lock_at(bootstrap: &Path, exclusive: bool) -> Result<File> {
+    try_lock_at(bootstrap, exclusive)?
+}
+
+/// The outer error: the lock file could not be opened or locked. The inner one: another
+/// process holds the lock in a conflicting mode.
+fn try_lock_at(bootstrap: &Path, exclusive: bool) -> Result<Result<File>> {
     let bootstrap = &pointer_path(bootstrap)?;
     let parent = bootstrap
         .parent()
@@ -277,13 +343,19 @@ fn lock_at(bootstrap: &Path, exclusive: bool) -> Result<File> {
     } else {
         file.try_lock_shared()
     };
-    result.map_err(|e| {
+    let message = |e: &dyn std::fmt::Display| {
         format!(
             "Cannot lock {}: {e}; close other launchers and stop games/builds before retrying",
             path.display()
         )
-    })?;
-    Ok(file)
+    };
+    match result {
+        Ok(()) => Ok(Ok(file)),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            Ok(Err(message(&std::fs::TryLockError::WouldBlock)))
+        }
+        Err(e) => Err(message(&e)),
+    }
 }
 
 pub fn migrate_current(source: &Roots, target: &Path, progress: impl FnMut(&str)) -> Result<Roots> {
@@ -402,100 +474,57 @@ fn migrate_locked(
 }
 
 /// What the launcher keeps in its build folder ([`crate::backend::build_dir`]): the Rust
-/// toolchain, its Cargo home, native mod builds and their scratch. When the build folder is the
-/// launcher folder itself (the default), a build-folder move takes only these.
+/// toolchain, its Cargo home, native mod builds and their scratch. A build-folder move, its
+/// cleanup and the uninstaller take only these, whether the build folder is the launcher folder
+/// (the default) or a folder of its own: that one is the player's choice, and anything else
+/// they keep in it is theirs.
 pub const BUILD_ENTRIES: [&str; 5] = ["rust", "cargo", "native", "tmp", "managed-native-target"];
 
-/// A committed build move: the new roots, and the old build files the worker removes.
+/// The launcher's own entries ([`BUILD_ENTRIES`]) in the build folder `build`.
+pub fn build_entries(build: &Path) -> Vec<PathBuf> {
+    BUILD_ENTRIES.iter().map(|name| build.join(name)).collect()
+}
+
+/// A committed build move: the new roots, the old build entries the worker removes, and the
+/// exclusive data-location lease, held until this is dropped.
 ///
-/// Both the copy and the removal use the one list of old folders worked out here from the
-/// validated (canonical) roots. Working it out again from another spelling of the same folders
-/// could take the launcher folder for a build folder of its own and empty all of it.
+/// Both the copy and the removal use the one list of old entries worked out here from the
+/// validated (canonical) roots. The lease keeps every other launcher out (see [`enter`]) until
+/// the old entries are removed too, not only until the pointer is committed: drop this only
+/// after [`BuildMove::remove_old`].
 #[derive(Debug)]
 pub struct BuildMove {
     pub roots: Roots,
-    old: OldBuild,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum OldBuild {
-    /// The build folder is the launcher folder: only [`BUILD_ENTRIES`] are build files.
-    Entries(Vec<PathBuf>),
-    /// A build folder of its own: everything in it, keeping the folder (the player may have
-    /// made it).
-    Contents(PathBuf),
-}
-
-impl OldBuild {
-    fn of(source: &Roots) -> Self {
-        if build_is_launcher(source) {
-            Self::Entries(
-                BUILD_ENTRIES
-                    .iter()
-                    .map(|name| source.build.join(name))
-                    .collect(),
-            )
-        } else {
-            Self::Contents(source.build.clone())
-        }
-    }
-
-    fn folders(&self) -> Vec<&Path> {
-        match self {
-            Self::Entries(entries) => entries.iter().map(PathBuf::as_path).collect(),
-            Self::Contents(folder) => vec![folder.as_path()],
-        }
-    }
+    old: Vec<PathBuf>,
+    _lease: File,
 }
 
 impl BuildMove {
-    /// Removes the old build files, which the launcher can make again; returns the ones that
-    /// could not be removed, with why.
+    /// Removes the old build entries, which the launcher can make again; returns the ones that
+    /// could not be removed, with why. Nothing else in the old build folder is touched.
     pub fn remove_old(&self) -> Vec<(PathBuf, String)> {
         let mut failed = Vec::new();
-        match &self.old {
-            OldBuild::Entries(entries) => {
-                for entry in entries {
-                    match fs::remove_dir_all(entry) {
-                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                            failed.push((entry.clone(), e.to_string()))
-                        }
-                        _ => {}
-                    }
+        for entry in &self.old {
+            match fs::remove_dir_all(entry) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    failed.push((entry.clone(), e.to_string()))
                 }
-            }
-            OldBuild::Contents(folder) => {
-                if let Err(e) = remove_contents(folder) {
-                    failed.push((folder.clone(), e.to_string()));
-                }
+                _ => {}
             }
         }
         failed
     }
 }
 
-fn remove_contents(folder: &Path) -> std::io::Result<()> {
-    for entry in fs::read_dir(folder)? {
-        let path = entry?.path();
-        if fs::symlink_metadata(&path)?.is_dir() {
-            fs::remove_dir_all(&path)?;
-        } else {
-            fs::remove_file(&path)?;
-        }
-    }
-    Ok(())
-}
-
-fn build_is_launcher(roots: &Roots) -> bool {
-    within(&roots.build, &roots.launcher) && within(&roots.launcher, &roots.build)
-}
-
-/// Like [`migrate_current`], but moves only the build folder: to `target` itself, an empty
-/// folder, leaving the launcher's and the game's data where they are.
+/// Like [`migrate_current`], but moves only the build files: to `target` itself, an empty
+/// folder, leaving the launcher's and the game's data where they are. `check` runs under the
+/// exclusive lease after the copy and before the commit (the worker refuses live games and
+/// builds there).
 pub fn migrate_build_current(
     source: &Roots,
     target: &Path,
     progress: impl FnMut(&str),
+    check: impl FnOnce() -> Result<()>,
 ) -> Result<BuildMove> {
     if has_override() {
         return Err(
@@ -511,7 +540,7 @@ pub fn migrate_build_current(
             Err(e) => return Err(e),
         }
     };
-    migrate_build_locked(source, target, &bootstrap, progress, &lease)
+    migrate_build_locked(source, target, &bootstrap, progress, check, lease)
 }
 
 /// [`migrate_build_current`] for an explicit bootstrap; tests use it.
@@ -521,8 +550,19 @@ pub fn migrate_build(
     bootstrap: &Path,
     progress: impl FnMut(&str),
 ) -> Result<BuildMove> {
+    migrate_build_checked(source, target, bootstrap, progress, || Ok(()))
+}
+
+/// [`migrate_build`] with the check [`migrate_build_current`] runs before committing.
+pub fn migrate_build_checked(
+    source: &Roots,
+    target: &Path,
+    bootstrap: &Path,
+    progress: impl FnMut(&str),
+    check: impl FnOnce() -> Result<()>,
+) -> Result<BuildMove> {
     let lease = lock_at(bootstrap, true)?;
-    migrate_build_locked(source, target, bootstrap, progress, &lease)
+    migrate_build_locked(source, target, bootstrap, progress, check, lease)
 }
 
 fn migrate_build_locked(
@@ -530,7 +570,8 @@ fn migrate_build_locked(
     target: &Path,
     bootstrap: &Path,
     mut progress: impl FnMut(&str),
-    _lease: &File,
+    check: impl FnOnce() -> Result<()>,
+    lease: File,
 ) -> Result<BuildMove> {
     let source = validate_roots(source)?;
     if let Some(current) = resolve_at(bootstrap)? {
@@ -541,19 +582,19 @@ fn migrate_build_locked(
             );
         }
     }
-    let old = OldBuild::of(&source);
+    let old = build_entries(&source.build);
     let pointer = pointer_path(bootstrap)?;
     // The old build files are removed once the move is committed: the pointer it commits, and
     // the lock beside it, must not be among them, or the next start forgets the move.
     let lock = pointer.with_file_name("migration.lock");
-    for folder in old.folders() {
+    for entry in &old {
         for control in [&pointer, &lock] {
-            if within(control, folder) {
+            if within(control, entry) {
                 return Err(format!(
                     "The location file {} is inside the build files in {}; keep it elsewhere \
                      (SUNRISE_LAUNCHER_LOCATION_FILE) before moving them",
                     control.display(),
-                    folder.display()
+                    entry.display()
                 ));
             }
         }
@@ -570,30 +611,27 @@ fn migrate_build_locked(
     }
     require_empty(&target)?;
     tool_safe(&target)?;
+    // The pointer this move commits names all three roots, and a start accepts it only if each
+    // is a folder ([`resolve_at`]). Before the first game launch the default game folder may not
+    // exist yet: it is made now, empty, as the game would make it, before anything is copied.
+    for (root, what) in [(&source.launcher, "launcher"), (&source.game, "game")] {
+        if !root.exists() {
+            fs::create_dir_all(root).map_err(|e| {
+                format!(
+                    "Cannot create the {what} folder {}: {e}. The build folder was not changed",
+                    root.display()
+                )
+            })?;
+        }
+    }
     fs::create_dir_all(&target).map_err(|e| problem(&target, e))?;
     let stage = target.join(".relocation-staging");
-    let result = (|| {
+    let result = (|| -> Result<Roots> {
         private_dir(&stage)?;
         progress("Copying and verifying build data");
-        match &old {
-            OldBuild::Contents(folder) => {
-                // The build folder's own entries, so they land in `target` itself.
-                for entry in fs::read_dir(folder).map_err(|e| problem(folder, e))? {
-                    let entry = entry.map_err(|e| problem(folder, e))?;
-                    copy_tree(
-                        &entry.path(),
-                        &stage.join(entry.file_name()),
-                        bootstrap,
-                        &mut progress,
-                    )?;
-                }
-            }
-            OldBuild::Entries(entries) => {
-                for from in entries.iter().filter(|from| from.exists()) {
-                    let name = from.file_name().ok_or("A build entry needs a name")?;
-                    copy_tree(from, &stage.join(name), bootstrap, &mut progress)?;
-                }
-            }
+        for from in old.iter().filter(|from| from.exists()) {
+            let name = from.file_name().ok_or("A build entry needs a name")?;
+            copy_tree(from, &stage.join(name), bootstrap, &mut progress)?;
         }
         for entry in fs::read_dir(&stage).map_err(|e| problem(&stage, e))? {
             let entry = entry.map_err(|e| problem(&stage, e))?;
@@ -602,6 +640,7 @@ fn migrate_build_locked(
         }
         fs::remove_dir(&stage).map_err(|e| problem(&stage, e))?;
         sync_dir(&target)?;
+        check()?;
         progress("Committing data location");
         let destination = Roots {
             launcher: source.launcher.clone(),
@@ -609,12 +648,16 @@ fn migrate_build_locked(
             build: target.clone(),
         };
         commit(bootstrap, &destination)?;
-        Ok(BuildMove {
-            roots: destination,
-            old,
-        })
+        Ok(destination)
     })();
-    result.map_err(|e: String| format!("{e}. The build folder was not changed. Partial copies may remain in {}; choose an empty folder to retry", target.display()))
+    match result {
+        Ok(roots) => Ok(BuildMove {
+            roots,
+            old,
+            _lease: lease,
+        }),
+        Err(e) => Err(format!("{e}. The build folder was not changed. Partial copies may remain in {}; choose an empty folder to retry", target.display())),
+    }
 }
 
 fn require_empty(target: &Path) -> Result<()> {

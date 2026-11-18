@@ -54,12 +54,19 @@ fn run_launcher() {
     if let Some(code) = sunrise_launcher::relocation::run_worker() {
         std::process::exit(code);
     }
+    // The shared data-location lease comes before anything resolves or reads a data root
+    // (the carry-over below included), and is kept for the life of the process. While a data or
+    // build move holds it, its folders are being copied or removed: this launcher stops here
+    // instead of starting on them, and the move's worker opens the launcher when it is done.
+    if let Err(busy) = sunrise_launcher::data_location::enter() {
+        eprintln!("{busy}");
+        std::process::exit(1);
+    }
     // A Sunrise build's first start copies the settings, accounts and instances of the launcher
     // before it into its own folders, before anything reads them.
     sunrise_launcher::carry_over::at_start();
     // A broken location must still open a window: startup() falls back to the default
     // folders and records the error, which Settings shows with Retry and Use the default folder.
-    // It keeps the migration lease for the life of the process.
     let _location_error = sunrise_launcher::data_location::startup();
     perf::process_started();
     backend::exe_path();

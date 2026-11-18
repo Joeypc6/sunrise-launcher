@@ -245,12 +245,20 @@ fn relocate_data(target: Option<PathBuf>) -> Result<String, String> {
 /// Moves the build folder; returns the new one. Build files are caches the launcher can make
 /// again, so once the new folder is verified and selected the old copies are removed, which is
 /// what frees the space; any that can't be are named after the new folder, one per line.
+///
+/// The exclusive lease is held from before the copy until the old files are removed (it lives
+/// in `moved`): no launcher starts on folders that are about to go. Live games and builds are
+/// checked again under it, just before the commit.
 fn relocate_build(target: Option<PathBuf>) -> Result<String, String> {
     let target = target.ok_or("--relocate-build needs an empty destination folder")?;
     let source = current_roots()?;
     ensure_idle(&source)?;
-    let moved =
-        data_location::migrate_build_current(&source, &target, |message| eprintln!("{message}"))?;
+    let moved = data_location::migrate_build_current(
+        &source,
+        &target,
+        |message| eprintln!("{message}"),
+        || ensure_idle(&source),
+    )?;
     println!("{}", moved.roots.build.display());
     let mut note = moved.roots.build.display().to_string();
     for (old, error) in moved.remove_old() {
@@ -258,6 +266,8 @@ fn relocate_build(target: Option<PathBuf>) -> Result<String, String> {
         note.push('\n');
         note.push_str(&old.display().to_string());
     }
+    // Releases the lease only now, after the cleanup; the launcher reopens after this returns.
+    drop(moved);
     Ok(note)
 }
 

@@ -549,15 +549,7 @@ fn build_move_takes_only_build_entries_from_the_launcher_folder() {
     assert!(!target.join(".relocation-staging").exists());
     // The move copies; the old build files are the worker's to remove.
     assert_eq!(snapshot(&f.temp.0.join("source")), before);
-    assert_eq!(
-        moved.old,
-        OldBuild::Entries(
-            BUILD_ENTRIES
-                .iter()
-                .map(|name| f.source.launcher.join(name))
-                .collect()
-        )
-    );
+    assert_eq!(moved.old, build_entries(&f.source.launcher));
     assert!(moved.remove_old().is_empty());
     for name in BUILD_ENTRIES {
         assert!(!f.source.launcher.join(name).exists(), "{name}");
@@ -571,21 +563,132 @@ fn build_move_takes_only_build_entries_from_the_launcher_folder() {
     assert!(f.source.launcher.join("empty").is_dir());
 }
 
+/// A build folder of its own is the player's choice: the move and its cleanup take only the
+/// launcher's entries, and a file of the player's beside them (the fixture's `cache` and
+/// `empty`, and `notes.txt`) is neither copied nor removed.
 #[test]
-fn build_move_takes_a_separate_build_folder_whole() {
+fn build_move_takes_only_build_entries_from_a_separate_folder() {
     let f = Fixture::new("build");
+    for name in ["rust/bin/rustc", "tmp/scratch", "native/target/x.rlib"] {
+        let path = f.source.build.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, name).unwrap();
+    }
+    fs::write(f.source.build.join("notes.txt"), b"mine").unwrap();
     let target = f.target();
     let moved = migrate_build(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
     assert_eq!(moved.roots.build, target);
     assert_eq!(moved.roots.launcher, f.source.launcher);
-    assert_eq!(snapshot(&f.source.build), snapshot(&target));
-    assert_eq!(moved.old, OldBuild::Contents(f.source.build.clone()));
-    f.unchanged();
+    assert_eq!(resolve_at(&f.bootstrap).unwrap(), Some(moved.roots.clone()));
+    for name in ["rust/bin/rustc", "tmp/scratch", "native/target/x.rlib"] {
+        assert_eq!(fs::read(target.join(name)).unwrap(), name.as_bytes());
+    }
+    for name in ["notes.txt", "cache", "empty"] {
+        assert!(!target.join(name).exists(), "{name} was copied");
+    }
+    assert_eq!(moved.old, build_entries(&f.source.build));
     assert!(moved.remove_old().is_empty());
-    // The folder itself stays, emptied; the launcher's and the game's data are untouched.
-    assert_eq!(fs::read_dir(&f.source.build).unwrap().count(), 0);
+    for name in BUILD_ENTRIES {
+        assert!(!f.source.build.join(name).exists(), "{name}");
+    }
+    // The player's files stay where they were; the launcher's and the game's data too.
+    assert_eq!(fs::read(f.source.build.join("notes.txt")).unwrap(), b"mine");
+    assert!(f.source.build.join("cache/compiled.bin").is_file());
+    assert!(f.source.build.join("empty").is_dir());
     assert!(f.source.launcher.join("accounts.json").is_file());
     assert!(f.source.game.join("saves/dummy/level.dat").is_file());
+}
+
+/// Before the first game launch the default game folder is absent. The move must not commit a
+/// pointer the next start refuses (it requires all three roots): the folder is made, and the
+/// next start reads the new location.
+#[test]
+fn build_move_without_a_game_folder_commits_a_pointer_the_next_start_accepts() {
+    let f = Fixture::new("launcher");
+    fs::remove_dir_all(&f.source.game).unwrap();
+    // The default location: no pointer yet.
+    fs::remove_file(&f.bootstrap).unwrap();
+    let moved = migrate_build(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap();
+    assert!(f.source.game.is_dir());
+    assert_eq!(fs::read_dir(&f.source.game).unwrap().count(), 0);
+    drop(moved);
+    // What the next start reads.
+    assert_eq!(startup_error_at(&f.bootstrap), None);
+    assert_eq!(
+        resolve_at(&f.bootstrap).unwrap(),
+        Some(Roots {
+            launcher: f.source.launcher.clone(),
+            game: f.source.game.clone(),
+            build: f.target(),
+        })
+    );
+}
+
+/// A launcher started while a move runs finds the lease busy and must stop: [`enter`] turns
+/// `Busy` into an error before any root is read.
+#[test]
+fn a_running_move_keeps_a_starting_launcher_out() {
+    let f = Fixture::new("launcher");
+    let worker = lock_at(&f.bootstrap, true).unwrap();
+    assert!(matches!(shared_lease_at(&f.bootstrap), Lease::Busy(_)));
+    drop(worker);
+    let Lease::Held(launcher) = shared_lease_at(&f.bootstrap) else {
+        panic!("the lease is free once the move is done");
+    };
+    // And a launcher that is running keeps a move from starting.
+    assert!(lock_at(&f.bootstrap, true).is_err());
+    drop(launcher);
+}
+
+/// The worker holds the exclusive lease through the cleanup of the old build files, not only
+/// through the commit: a launcher starting in between is kept out until `BuildMove` is dropped.
+#[test]
+fn build_move_holds_the_lease_until_the_old_files_are_removed() {
+    let f = Fixture::new("launcher");
+    fs::create_dir_all(f.source.launcher.join("rust/bin")).unwrap();
+    fs::write(f.source.launcher.join("rust/bin/rustc"), b"rustc").unwrap();
+    let moved = migrate_build(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap();
+    assert_eq!(resolve_at(&f.bootstrap).unwrap(), Some(moved.roots.clone()));
+    assert!(matches!(shared_lease_at(&f.bootstrap), Lease::Busy(_)));
+    assert!(moved.remove_old().is_empty());
+    assert!(!f.source.launcher.join("rust").exists());
+    assert!(matches!(shared_lease_at(&f.bootstrap), Lease::Busy(_)));
+    drop(moved);
+    assert!(matches!(shared_lease_at(&f.bootstrap), Lease::Held(_)));
+}
+
+/// The live game and build check runs under the exclusive lease, after the copy and before the
+/// commit; when it refuses, the old pointer stays and nothing old is removed.
+#[test]
+fn build_move_checks_for_live_games_under_the_lease_before_committing() {
+    let f = Fixture::new("launcher");
+    fs::create_dir_all(f.source.launcher.join("rust")).unwrap();
+    fs::write(f.source.launcher.join("rust/rustc"), b"rustc").unwrap();
+    let mut checked = false;
+    let error = migrate_build_checked(
+        &f.source,
+        &f.target(),
+        &f.bootstrap,
+        |_| {},
+        || {
+            checked = true;
+            assert!(matches!(shared_lease_at(&f.bootstrap), Lease::Busy(_)));
+            assert!(f.target().join("rust/rustc").is_file(), "after the copy");
+            assert_eq!(
+                fs::read(&f.bootstrap).unwrap(),
+                f.pointer,
+                "before the commit"
+            );
+            Err("sunrise-client is running".into())
+        },
+    )
+    .unwrap_err();
+    assert!(checked);
+    assert!(error.contains("sunrise-client is running"), "{error}");
+    assert_eq!(fs::read(&f.bootstrap).unwrap(), f.pointer);
+    assert_eq!(resolve_at(&f.bootstrap).unwrap(), Some(f.source.clone()));
+    assert!(f.source.launcher.join("rust/rustc").is_file());
+    assert!(matches!(shared_lease_at(&f.bootstrap), Lease::Held(_)));
 }
 
 #[test]
@@ -651,14 +754,12 @@ fn build_cleanup_keeps_launcher_data_under_another_spelling() {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, name).unwrap();
     }
-    // As spelled, the two look like separate folders: deciding from these would empty the
-    // whole launcher folder.
-    assert!(!build_is_launcher(&source));
+    // As spelled, the two look like separate folders; the move takes only the build entries
+    // either way, never the whole launcher folder.
     let bootstrap = temp.0.join("bootstrap/location.json");
     let target = temp.0.join("builds");
 
     let moved = migrate_build(&source, &target, &bootstrap, |_| {}).unwrap();
-    assert!(matches!(moved.old, OldBuild::Entries(_)), "{:?}", moved.old);
     assert!(!target.join("accounts.json").exists());
     assert!(target.join("rust/bin/rustc").is_file());
     assert!(moved.remove_old().is_empty());
@@ -678,7 +779,7 @@ fn build_cleanup_keeps_launcher_data_under_another_spelling() {
 #[test]
 fn build_move_refuses_a_pointer_among_the_build_files() {
     for (build, pointer) in [
-        ("build", "build/location.json"),
+        ("build", "build/tmp/location.json"),
         ("launcher", "launcher/rust/location.json"),
     ] {
         let f = Fixture::new(build);
@@ -691,11 +792,17 @@ fn build_move_refuses_a_pointer_among_the_build_files() {
         assert_eq!(resolve_at(&bootstrap).unwrap(), Some(f.source.clone()));
         assert!(!f.target().exists());
     }
-    // Beside the build entries, in the launcher folder itself, it is kept and the move goes on.
-    let f = Fixture::new("launcher");
-    let bootstrap = f.source.launcher.join("location.json");
-    fs::write(&bootstrap, &f.pointer).unwrap();
-    let moved = migrate_build(&f.source, &f.target(), &bootstrap, |_| {}).unwrap();
-    assert!(moved.remove_old().is_empty());
-    assert_eq!(resolve_at(&bootstrap).unwrap(), Some(moved.roots));
+    // Beside the build entries, in the launcher folder or a build folder of its own, it is
+    // kept and the move goes on.
+    for (build, pointer) in [
+        ("launcher", "launcher/location.json"),
+        ("build", "build/location.json"),
+    ] {
+        let f = Fixture::new(build);
+        let bootstrap = f.temp.0.join("source").join(pointer);
+        fs::write(&bootstrap, &f.pointer).unwrap();
+        let moved = migrate_build(&f.source, &f.target(), &bootstrap, |_| {}).unwrap();
+        assert!(moved.remove_old().is_empty());
+        assert_eq!(resolve_at(&bootstrap).unwrap(), Some(moved.roots.clone()));
+    }
 }

@@ -83,7 +83,10 @@ The opening, then Play ([clip](docs/opening.webm)):
   stay where they are. It runs offline like the data move, with the same checks (idle launcher, no
   links, no overlap with the data folders, ASCII without spaces on Windows). Once the copy is
   verified and selected, the old build files are removed, since the launcher can make them again;
-  any it cannot remove are named when it reopens. A portable `SUNRISE_LAUNCHER_LOCATION_FILE`
+  any it cannot remove are named when it reopens. Only those entries are moved and removed, also
+  from a build folder of your own choosing: anything else you keep there stays, and uninstalling
+  with "remove data" leaves it too. A launcher opened during the move stops until the move and its
+  cleanup are done, and the move opens it again then. A portable `SUNRISE_LAUNCHER_LOCATION_FILE`
   kept among the build files is refused, since it would be removed with them. A later data move takes a build folder of its own
   along, into the destination's `build`.
 - **Play**: prepares resources as `PLAY.txt` describes (your launcher's 26.3 install, the

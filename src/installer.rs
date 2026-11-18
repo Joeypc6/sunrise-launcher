@@ -443,10 +443,51 @@ fn made_by_launcher(data: &Path, location: Option<&Roots>) -> bool {
     crate::identity::owns_launcher_data_dir(data) || laid_out
 }
 
-/// Whether `builds`, [`backend::build_dir`], goes with a data folder the launcher made. In a moved
-/// location it is `<folder>\build` or inside the launcher folder; elsewhere it is always ours.
-fn builds_are_launchers(builds: &Path, data: &Path, location: Option<&Roots>) -> bool {
-    location.is_none() || builds.starts_with(data) || named(builds, "build")
+/// What `--remove-data` removes of `builds`, [`backend::build_dir`], once the data folder `data`
+/// the launcher made is gone.
+#[derive(Debug, PartialEq, Eq)]
+enum BuildRemoval {
+    /// The whole folder: the default build folder, inside the data folder or ProgramData's
+    /// ASCII one ([`backend::build_dir`]), is the launcher's own.
+    Folder(PathBuf),
+    /// Only the launcher's entries ([`data_location::BUILD_ENTRIES`]) in a build folder the
+    /// player chose: anything else in it is theirs, whatever the folder is called.
+    Entries(Vec<PathBuf>),
+}
+
+fn build_removal(builds: &Path, data: &Path, location: Option<&Roots>) -> BuildRemoval {
+    if location.is_none() || builds.starts_with(data) {
+        BuildRemoval::Folder(builds.to_path_buf())
+    } else {
+        BuildRemoval::Entries(data_location::build_entries(builds))
+    }
+}
+
+/// Carries out [`build_removal`]; what stays behind is listed in `left`.
+fn remove_builds(builds: &Path, data: &Path, location: Option<&Roots>, left: &mut Vec<String>) {
+    match build_removal(builds, data, location) {
+        BuildRemoval::Folder(folder) => remove_all(&folder, left),
+        BuildRemoval::Entries(entries) => {
+            for entry in entries {
+                remove_all(&entry, left);
+            }
+            // The `build` folder a full data move lays out beside `launcher` is the launcher's
+            // too: it goes once empty. Any other folder, or one holding files of the player's,
+            // stays.
+            let laid_out = location.is_some_and(|r| {
+                named(builds, "build")
+                    && builds
+                        .parent()
+                        .is_some_and(|p| Some(p) == r.launcher.parent())
+            });
+            if laid_out && fs::remove_dir(builds).is_err() && builds.exists() {
+                left.push(format!(
+                    "{} (holds files that are not the launcher's)",
+                    builds.display()
+                ));
+            }
+        }
+    }
 }
 
 /// Takes the install away. Returns what could not be removed (a file in use, say).
@@ -533,16 +574,11 @@ pub fn uninstall(remove_data: bool, progress: impl Fn(Step, f32)) -> Result<Vec<
         if made_by_launcher(&data, location.as_ref()) {
             remove_all(&data, &mut left);
             // A profile whose name isn't ASCII keeps the build folder in %ProgramData%
-            // (`backend::build_dir`); it is the launcher's too. Already gone with `data` otherwise.
+            // (`backend::build_dir`); it is the launcher's too. Already gone with `data` when
+            // inside it. A build folder of the player's choosing loses only the launcher's
+            // entries.
             let builds = backend::build_dir();
-            if builds_are_launchers(&builds, &data, location.as_ref()) {
-                remove_all(&builds, &mut left);
-            } else {
-                left.push(format!(
-                    "{} (not the launcher's own folder)",
-                    builds.display()
-                ));
-            }
+            remove_builds(&builds, &data, location.as_ref(), &mut left);
         } else {
             left.push(format!(
                 "{} (not the launcher's own folder)",
@@ -652,7 +688,10 @@ mod tests {
         // The default folder, and one `SUNRISE_LAUNCHER_HOME` names the same: the launcher's own.
         let default = Path::new("profile").join(crate::identity::LAUNCHER_FOLDER);
         assert!(made_by_launcher(&default, None));
-        assert!(builds_are_launchers(&default, &default, None));
+        assert_eq!(
+            build_removal(&default, &default, None),
+            BuildRemoval::Folder(default.clone())
+        );
         // An earlier launcher's folder stays.
         for (old, _, _) in crate::identity::EARLIER {
             assert!(
@@ -663,19 +702,27 @@ mod tests {
         assert!(!made_by_launcher(Path::new(r"D:\Documents"), None));
         assert!(!made_by_launcher(Path::new(r"D:\Games\launcher"), None));
 
-        // Data moved to D:\Sunrise (`data_location::layout`): its launcher and build folders go,
-        // the game folder never.
+        // Data moved to D:\Sunrise (`data_location::layout`): its launcher folder and the
+        // launcher's build entries go, the game folder never.
         let moved = moved_to(r"D:\Sunrise");
         assert!(made_by_launcher(&moved.launcher, Some(&moved)));
-        assert!(builds_are_launchers(
-            &moved.build,
-            &moved.launcher,
-            Some(&moved)
-        ));
+        assert_eq!(
+            build_removal(&moved.build, &moved.launcher, Some(&moved)),
+            BuildRemoval::Entries(data_location::build_entries(&moved.build))
+        );
         assert!(!made_by_launcher(&moved.game, Some(&moved)));
         // A build folder inside the launcher folder goes with it.
         let inside = Path::new(r"D:\Sunrise\launcher\build");
-        assert!(builds_are_launchers(inside, &moved.launcher, Some(&moved)));
+        assert_eq!(
+            build_removal(inside, &moved.launcher, Some(&moved)),
+            BuildRemoval::Folder(inside.to_path_buf())
+        );
+        // A build folder of the player's, even one called `build`: only the launcher's entries.
+        let chosen = Path::new(r"D:\build");
+        assert_eq!(
+            build_removal(chosen, &moved.launcher, Some(&moved)),
+            BuildRemoval::Entries(data_location::build_entries(chosen))
+        );
 
         // Not what a move lays out (a location file edited by hand): left alone.
         let odd = Roots {
@@ -687,12 +734,47 @@ mod tests {
             build: PathBuf::from(r"D:\Documents"),
             ..moved.clone()
         };
-        assert!(!builds_are_launchers(&odd.build, &odd.launcher, Some(&odd)));
+        assert_eq!(
+            build_removal(&odd.build, &odd.launcher, Some(&odd)),
+            BuildRemoval::Entries(data_location::build_entries(&odd.build))
+        );
         // Another folder called `launcher` than the configured one.
         assert!(!made_by_launcher(
             Path::new(r"D:\Elsewhere\launcher"),
             Some(&moved)
         ));
+    }
+
+    /// "Remove data" in a build folder of the player's (here one called `build`, beside the
+    /// moved launcher folder, as a full move lays out): the launcher's entries go, a file of
+    /// the player's beside them stays, and so does the folder holding it.
+    #[test]
+    fn uninstall_keeps_unrelated_files_in_a_build_folder() {
+        let root = std::env::temp_dir().join(format!("sunrise-uninstall-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let moved = moved_to(&root.to_string_lossy());
+        for name in data_location::BUILD_ENTRIES {
+            fs::create_dir_all(moved.build.join(name).join("inner")).unwrap();
+            fs::write(moved.build.join(name).join("inner/file"), name).unwrap();
+        }
+        fs::write(moved.build.join("notes.txt"), b"mine").unwrap();
+        let mut left = Vec::new();
+        remove_builds(&moved.build, &moved.launcher, Some(&moved), &mut left);
+        for name in data_location::BUILD_ENTRIES {
+            assert!(!moved.build.join(name).exists(), "{name}");
+        }
+        assert_eq!(fs::read(moved.build.join("notes.txt")).unwrap(), b"mine");
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert!(left[0].contains("not the launcher's"), "{left:?}");
+
+        // Emptied of the launcher's entries only, the laid-out folder goes too.
+        fs::remove_file(moved.build.join("notes.txt")).unwrap();
+        fs::create_dir_all(moved.build.join("rust")).unwrap();
+        let mut left = Vec::new();
+        remove_builds(&moved.build, &moved.launcher, Some(&moved), &mut left);
+        assert!(left.is_empty(), "{left:?}");
+        assert!(!moved.build.exists());
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// What the shell itself reads as the shortcut's target: the field Explorer starts from.
