@@ -234,6 +234,12 @@ impl Launcher {
             .children(status)
             .children(self.registry_notice_strip(cx))
             .child(content);
+        let titlebar = titlebar::render(&self.theme, window, cx);
+        let titlebar_h = if titlebar.is_some() {
+            titlebar::HEIGHT
+        } else {
+            0.
+        };
         let mut frame = div()
             .id("launcher-frame")
             .track_focus(&self.root_focus)
@@ -288,7 +294,7 @@ impl Launcher {
                 cx.stop_propagation();
                 cx.notify();
             }))
-            .children(titlebar::render(&self.theme, window, cx))
+            .children(titlebar)
             .children(self.settings_save_notice(cx))
             .child(
                 div()
@@ -325,7 +331,7 @@ impl Launcher {
         let top = self.modal(layers.pop(), window, cx);
         frame = frame.children(layers).children(top);
         frame = frame.children(self.viewer(window, cx));
-        frame = frame.children(self.toast_float());
+        frame = frame.children(self.toast_float(titlebar_h));
         self.pictures.free_retired(window);
         let scenery = self
             .ui
