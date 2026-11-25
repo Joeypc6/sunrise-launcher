@@ -54,31 +54,7 @@ const PREFIX: &str = "native-";
 // A staging change invalidates both installed builds and patched-source snapshots.
 const STAGING: &str = "area-aware-mixins-input-v1";
 
-/// Native mods use the SDK's optimized compilation settings.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    serde::Serialize,
-    serde::Deserialize,
-    clap::ValueEnum,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum Profile {
-    #[default]
-    Optimized,
-}
-impl Profile {
-    pub fn name(self) -> &'static str {
-        "optimized"
-    }
-    fn cargo(self) -> (&'static str, &'static [&'static str]) {
-        ("release", &[])
-    }
-}
+pub use sunrise_launcher_domain::Profile;
 
 /// Where the launcher installs what a [`Target`] builds.
 trait Installed {
@@ -695,9 +671,11 @@ pub fn base_for(current: Option<&str>, installed: &[String], update: bool) -> Op
         (true, Some(current)) => {
             let native = about(current);
             let base = native.as_ref().map_or(current, |build| build.base.as_str());
-            crate::instances::Channel::of_build(base)?
-                .newest_installed(installed)
-                .cloned()
+            crate::instances::newest_installed(
+                crate::instances::Channel::of_build(base)?,
+                installed,
+            )
+            .cloned()
         }
         (false, Some(v)) if installed.iter().any(|t| t == v) => Some(v.to_owned()),
         _ => newest_installed(installed).cloned(),
@@ -711,8 +689,7 @@ pub fn update_for(version: &str, installed: &[String]) -> Option<String> {
 }
 
 pub fn newer_than(base: &str, installed: &[String]) -> Option<String> {
-    crate::instances::Channel::of_build(base)?
-        .newest_installed(installed)
+    crate::instances::newest_installed(crate::instances::Channel::of_build(base)?, installed)
         .filter(|n| backend::compare_game_versions(n, base).is_gt())
         .cloned()
 }
@@ -2460,8 +2437,7 @@ fn plain_pin(
 ) -> Result<Option<String>, String> {
     let selected = installed.iter().find(|tag| Some(tag.as_str()) == selected);
     let target = |releases: &[backend::Release]| {
-        channel
-            .play_target(releases, installed, nightly, selected)
+        crate::instances::play_target(channel, releases, installed, nightly, selected)
             .map(String::as_str)
             == Some(plain)
     };
