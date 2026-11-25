@@ -261,7 +261,9 @@ What to remove when you see it, and never add:
 ## 8. Guardrails in CI (the ratchet)
 
 The first PR adds `tools/ci/structure_check.py`. CI runs it twice, on the PR's head and on the
-commit it's based on, and fails if any of these counts goes **up**:
+commit it's based on, and fails if any of these counts goes **up**. The
+launcher's whole-file copies of game files (`SAME_BYTES` and `SAME_CODE` in
+`tools/tests/test_game_copies.py`) are left out: they must stay equal to the game's (§2). The counts:
 
 - files directly under `src/`
 - `.rs` files over 1000 lines

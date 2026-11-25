@@ -4,11 +4,15 @@ Both revisions are read as git objects, so neither needs a checkout. There is no
 the baseline, and a pull request that lowers a count needs nothing extra.
 """
 import argparse
+import ast
 import posixpath
 import re
 import subprocess
 import sys
 
+# The launcher's copies of game files, which must stay equal to the game's (docs/refactoring.md §2), are listed
+# here: whole-file copies are not the launcher's code to change, so they don't count.
+GAME_COPIES = "tools/tests/test_game_copies.py"
 RETIRED_PREFIXES = ("glass_", "blocks_", "alt_", "launcher_")
 LONG_FILE = 1000
 LONG_FUNCTION = 80
@@ -92,6 +96,21 @@ def blobs(ids: list[str]) -> list[str]:
         texts.append(out[start:start + size].decode("utf-8", "replace"))
         at = start + size + 1
     return texts
+
+
+def game_copies(text: str) -> tuple[str, ...]:
+    """The launcher's paths of the whole-file game copies (`SAME_BYTES`, `SAME_CODE`) that `text` lists."""
+    copies = []
+    for node in ast.parse(text).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id in ("SAME_BYTES", "SAME_CODE") for target in node.targets
+        ):
+            copies.extend(entry[1] for entry in ast.literal_eval(node.value))
+    return tuple(copies)
+
+
+def is_copy(path: str, copies: tuple[str, ...]) -> bool:
+    return any(path == copy or path.startswith(copy + "/") for copy in copies)
 
 
 def is_test_file(path: str) -> bool:
@@ -343,12 +362,17 @@ def measure(rev: str) -> dict[str, int]:
     counts["src_files"] = sum(1 for _, path in files if path.startswith("src/") and path.count("/") == 1)
     counts["retired_names"] = sum(1 for _, path in files if has_retired_name(path))
     texts = dict(zip((path for _, path in rust), blobs([blob for blob, _ in rust])))
+    listing = [blob for blob, path in files if path == GAME_COPIES]
+    copies = game_copies(blobs(listing)[0]) if listing else ()
     tests = test_files(texts)
     modules = module_tree("src/lib.rs", texts) if "src/lib.rs" in texts else {}
     ui_modules = module_tree("src/main.rs", texts) if "src/main.rs" in texts else {}
     lib_files = set().union(*modules.values()) if modules else set()
     functions = set()
     for path, text in texts.items():
+        functions.update(FN.findall(text))
+        if is_copy(path, copies):
+            continue
         counts["long_files"] += len(text.splitlines()) > LONG_FILE
         counts["path_attributes"] += len(PATH_ATTRIBUTE.findall(text))
         for lints in ALLOW.findall(text):
@@ -363,7 +387,6 @@ def measure(rev: str) -> dict[str, int]:
             counts["gpui_files"] += 1
             if path in lib_files:
                 counts["lib_gpui_files"] += 1
-        functions.update(FN.findall(text))
     counts["cyclic_modules"], counts["mutual_imports"] = cycles(modules, texts)
     counts["ui_cyclic_modules"], counts["ui_mutual_imports"] = cycles(ui_modules, texts)
     manual = [blob for blob, path in files if path == "tools/ci/manual-tests.txt"]

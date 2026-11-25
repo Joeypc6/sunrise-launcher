@@ -91,6 +91,22 @@ class StructureCheck(unittest.TestCase):
         self.assertEqual((counts["unwraps"], counts["string_errors"], counts["stale_manual_tests"]), (0, 0, 0))
         self.assertNotIn("went up", out)
 
+    def test_whole_file_game_copies_are_not_counted(self):
+        copied = "pub fn fetch() -> Result<(), String> { get().unwrap(); Ok(()) }\n" + "\n" * check.LONG_FILE
+        head = self.repo.commit({
+            "crates/fetch/src/lib.rs": copied,
+            "crates/kept/src/lib.rs": copied,
+            check.GAME_COPIES: (
+                'SAME_BYTES = (("crates/sunrise-fetch/src/lib.rs", "crates/fetch/src/lib.rs"),)\n'
+                'SAME_CODE = (("crates/sunrise-net/src/lib.rs", "src/net.rs", (("a", "b"),)),)\n'
+                'SAME_FUNCTIONS = (("crates/sunrise-kept/src/lib.rs", "crates/kept/src/lib.rs", ("fetch",)),)\n'
+            ),
+        })
+        counts = check.measure(head)
+        # Only crates/kept counts: crates/fetch and src/net.rs are whole-file copies, while a copy of
+        # some functions is still the launcher's file.
+        self.assertEqual((counts["unwraps"], counts["string_errors"], counts["long_files"]), (1, 1, 1))
+
     def test_test_code_is_not_counted(self):
         test_code = "fn t() -> Result<(), String> { x.unwrap(); Ok(()) }\n"
         head = self.repo.commit({
