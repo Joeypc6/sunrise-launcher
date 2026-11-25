@@ -122,6 +122,16 @@ fn check_before_play(
     }
     Ok(lines)
 }
+/// Check these mods may be on for this active build, then turn them on together.
+pub fn activate(
+    home: &Path,
+    active: Option<&crate::managed_play::Active>,
+    ids: &[&str],
+) -> Result<(), String> {
+    check_activation(home, active, ids)?;
+    mod_list::set_all_enabled(home, ids, true)
+}
+
 pub mod auto;
 pub mod pack;
 pub mod ratings;
@@ -129,8 +139,8 @@ mod registry_install;
 pub mod sources;
 pub mod v2;
 pub(crate) use registry_install::check_activation;
+pub(crate) use registry_install::v2::fetch_release_bytes;
 pub use registry_install::v2::revoked_for_package;
-pub(crate) use registry_install::v2::{fetch_release_bytes, revoked_for_installed_package};
 pub use registry_install::{
     add_github, add_sources, apply_sources, checked_switch_fit_v2, classify_v2_ownership,
     install_github_manual, install_local, install_local_at, install_registry_v2, inventory_v2,
