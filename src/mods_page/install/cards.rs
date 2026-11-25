@@ -128,6 +128,22 @@ impl Launcher {
     }
 }
 
+impl Launcher {
+    /// What the install under way does, for the status strip: "Updating mods in Survival".
+    pub(crate) fn registry_title(&self) -> Option<String> {
+        let run = self.mods.installs.running.as_ref()?;
+        let kinds = || run.requests.iter().map(|request| request.kind);
+        let profile = [("profile", run.profile.name.as_str())];
+        Some(if kinds().all(|kind| kind == Kind::Remove) {
+            trf("Removing mods from {profile}", &profile)
+        } else if kinds().all(|kind| matches!(kind, Kind::UpdateV2 | Kind::UpdateAllV2)) {
+            trf("Updating mods in {profile}", &profile)
+        } else {
+            trf("Installing mods in {profile}", &profile)
+        })
+    }
+}
+
 pub(crate) fn stage_label(step: InstallProgress) -> String {
     match step {
         InstallProgress::PreparingBuild => tr("Getting the build ready…").into(),

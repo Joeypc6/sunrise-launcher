@@ -359,7 +359,7 @@ impl Main {
     }
 
     /// Something Play waits for, as the strip says it off Home.
-    fn under_way(self) -> bool {
+    pub(crate) fn under_way(self) -> bool {
         matches!(
             self,
             Main::Installing(_)

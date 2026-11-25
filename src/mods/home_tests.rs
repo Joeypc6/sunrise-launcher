@@ -96,7 +96,7 @@ fn home_labels_follow_installed_replies_with_the_same_inventory() {
 
 // Launcher startup uses process settings and starts workers. Run it with its own folders,
 // no keychain, and a proxy that can't reach the registry or update services.
-fn in_scratch_launcher(test: &str, run: impl FnOnce(&mut Launcher)) {
+pub(crate) fn in_scratch_launcher(test: &str, run: impl FnOnce(&mut Launcher)) {
     const CHILD: &str = "SUNRISE_HOME_TEST_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let root = tempfile::tempdir().unwrap();

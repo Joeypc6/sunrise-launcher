@@ -257,7 +257,7 @@ impl Launcher {
         });
     }
 
-    pub(in crate::sheets) fn cancel_switch(&mut self) {
+    pub(crate) fn cancel_switch(&mut self) {
         let Some(running) = &mut self.ui.sheets.switching.running else {
             return;
         };
@@ -301,10 +301,15 @@ impl Launcher {
             .switching
             .running
             .as_mut()
-            .filter(|run| self.ui.sheet == Some(Sheet::Switching) && !run.stop.is_stopped())
+            .filter(|run| !run.stop.is_stopped())
         {
             running.question = Some((question, reply));
             self.ui.sheets.details = false;
+            // A hidden switch comes back for its answer, unless another sheet is open: then the
+            // status strip says it waits, and Show opens it.
+            if self.ui.sheet.is_none() {
+                self.open_sheet(Sheet::Switching);
+            }
         } else {
             let _ = reply.send(SwitchDecision::Cancel);
         }
@@ -317,6 +322,7 @@ impl Launcher {
     ) {
         let running = self.ui.sheets.switching.running.take();
         let stopped = running.as_ref().is_some_and(|run| run.stop.is_stopped());
+        let tag = running.as_ref().map(|run| run.tag.clone());
         let back = running.and_then(|run| run.back);
         let result = if result.is_err() && stopped {
             Ok(Switched::Stayed)
@@ -346,6 +352,9 @@ impl Launcher {
                     self.open_sheet(Sheet::BuildChanges);
                 } else if visible {
                     self.close_sheet();
+                } else if let Some(tag) = tag {
+                    // Its sheet was hidden: the status strip's row is gone, so say it ended.
+                    toast::say(trf("Switched to {build}.", &[("build", &build_name(&tag))]));
                 }
             }
             Ok(Switched::Stayed) => {
@@ -362,10 +371,11 @@ impl Launcher {
                     self.close_sheet();
                 }
             }
-            Err(error) if visible => {
+            // A hidden switch that failed says so too, over the page when nothing else is open.
+            Err(error) if visible || self.ui.sheet.is_none() => {
                 self.open_notice(error, Some(WayOut::ProfileFolder(home.into())))
             }
-            Err(_) => (),
+            Err(error) => toast::say(error),
         }
     }
 
@@ -572,14 +582,21 @@ impl Launcher {
                         .map(|f| (f, f)),
                     &self.theme,
                 ))
-                .child(div().flex().justify_end().child(if stopping || publishing {
-                    crate::widgets::disabled(cancel)
-                } else {
-                    cancel.on_click(cx.listener(|this, _, _, cx| {
-                        this.cancel_switch();
-                        cx.notify();
-                    }))
-                }))
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.))
+                        .child(hide_button("hide-switch", cx))
+                        .child(if stopping || publishing {
+                            crate::widgets::disabled(cancel)
+                        } else {
+                            cancel.on_click(cx.listener(|this, _, _, cx| {
+                                this.cancel_switch();
+                                cx.notify();
+                            }))
+                        }),
+                )
         };
         frame("switch-game", 610., body, cx)
     }

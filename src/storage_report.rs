@@ -9,6 +9,7 @@ impl Launcher {
             return;
         }
         self.storage_pending = true;
+        self.storage_clearing = clear.is_some() || all;
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let result = storage::Storage::open()

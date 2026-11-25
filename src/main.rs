@@ -212,11 +212,17 @@ struct Launcher {
     installed: Vec<String>,
     known_nightly: Option<String>,
     installing: Option<(String, f32)>,
+    /// Stops the game build download under way: its own, or the build switch's it serves.
+    install_stop: Option<native_mods::Cancellation>,
+    /// The status strip's list of work under way: open or folded, and the time left it measures.
+    jobs: status_strip::Jobs,
     /// The confirmed builds whose removal is in progress.
     removing: Vec<String>,
     storage_builds: storage_builds::View,
     storage_report: Option<storage::Report>,
     storage_pending: bool,
+    /// The storage work under way is a Clear, not a count.
+    storage_clearing: bool,
     /// A Clear the player still has to confirm: `Some(None)` is Clear all.
     storage_confirm: Option<Option<storage::Category>>,
     storage_error: Option<String>,

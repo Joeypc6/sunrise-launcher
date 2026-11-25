@@ -91,6 +91,16 @@ impl Servers {
         self.busy.is_some() || self.creating || self.applying.is_some() || !self.queued.is_empty()
     }
 
+    /// The hosting job under way, for the status strip: what it does, and its last log line.
+    pub(crate) fn job(&self) -> Option<(String, Option<String>)> {
+        let what = match &self.busy {
+            Some(doing) => tr(doing).to_string(),
+            None if self.creating => tr("Setting up the server").to_string(),
+            None => return None,
+        };
+        Some((what, self.job_log.back().cloned()))
+    }
+
     pub(crate) fn location_busy(&self) -> bool {
         self.writing()
             || self
