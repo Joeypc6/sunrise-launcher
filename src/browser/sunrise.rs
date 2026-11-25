@@ -1,7 +1,7 @@
 //! Sunrise's own registry: mods reviewed in sunrise-org/sunrise-mods, read from the signed index
 //! ([`v2`]); installs, updates and build switches check every download against it, and mods it
 //! says were taken down are turned off before play.
-use super::{installed, mod_list, Kind, SourceId};
+use super::{installed, mod_list, SourceId};
 use crate::i18n::{tr, trf};
 use std::fs;
 use std::path::Path;
@@ -122,64 +122,6 @@ fn check_before_play(
     }
     Ok(lines)
 }
-/// Pre-Play takedown checks on the profile's own mod folder, before the profile journal freezes
-/// it: a mod the signed registry took down must be off (or gone) before Play.
-pub fn pre_play_notices(home: &Path) -> Result<Vec<String>, String> {
-    use crate::managed_play::scan_packages;
-    let packages = scan_packages(home)?;
-    let rows = installed::Installed::read(home)?;
-    if !rows
-        .entries
-        .iter()
-        .any(|row| row.source == SourceId::Sunrise)
-        && !packages.iter().any(|package| {
-            package.manifest.native.is_some() && mod_list::is_enabled(home, &package.manifest.id)
-        })
-    {
-        return Ok(Vec::new());
-    }
-    let Some(index) = v2::index().ok().map(|catalog| catalog.index) else {
-        return Ok(vec![
-            tr("Mods were not checked for registry takedowns.").into()
-        ]);
-    };
-    for package in &packages {
-        let id = &package.manifest.id;
-        if package.directory || !mod_list::is_enabled(home, id) {
-            continue;
-        }
-        let hash = sunrise_launcher_smod::index::sha256_file(&package.path)?;
-        if let Some(revoked) = revoked_for_installed_package(&index, &rows, home, package, &hash) {
-            return Err(trf(
-                "{mod} was taken down. Turn it off before playing.\n{reason}",
-                &[("mod", &package.manifest.name), ("reason", &revoked.reason)],
-            ));
-        }
-    }
-    let mut notices = Vec::new();
-    for entry in rows.entries {
-        if entry.source != SourceId::Sunrise
-            || !matches!(entry.kind, Kind::ResourcePack | Kind::Shader)
-        {
-            continue;
-        }
-        let revoked = if index_v2::valid_project_id(&entry.project) {
-            index.revoked(&entry.project, entry.sha256())
-        } else {
-            entry
-                .sha256()
-                .and_then(|hash| index.revoked_by_sha256(hash))
-        };
-        if let Some(revoked) = revoked {
-            notices.push(trf(
-                "{mod} was taken down: {reason} Remove it.",
-                &[("mod", &entry.title), ("reason", &revoked.reason)],
-            ));
-        }
-    }
-    Ok(notices)
-}
-
 /// Check these mods may be on for this active build, then turn them on together.
 pub fn activate(
     home: &Path,
@@ -197,8 +139,8 @@ mod registry_install;
 pub mod sources;
 pub mod v2;
 pub(crate) use registry_install::check_activation;
+pub(crate) use registry_install::v2::fetch_release_bytes;
 pub use registry_install::v2::revoked_for_package;
-pub(crate) use registry_install::v2::{fetch_release_bytes, revoked_for_installed_package};
 pub use registry_install::{
     add_github, add_sources, apply_sources, checked_switch_fit_v2, classify_v2_ownership,
     install_github_manual, install_local, install_local_at, install_registry_v2, inventory_v2,

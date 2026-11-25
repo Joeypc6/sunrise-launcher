@@ -53,9 +53,7 @@ mod ownership;
 mod plan;
 mod queue;
 mod types;
-pub use crate::managed_play::{
-    classify_v2_ownership, revoked_for_installed_package, revoked_for_package, V2Ownership,
-};
+pub use crate::managed_play::{classify_v2_ownership, revoked_for_package, V2Ownership};
 pub use ownership::*;
 pub use plan::*;
 use queue::*;
