@@ -12,6 +12,9 @@ use sunrise_launcher_telemetry::{outbox, Choices, Consent, Item, Kind, Payload, 
 
 use crate::{account::Accounts, backend};
 
+mod gather;
+pub use gather::gather;
+
 /// Each switch: its name, what it is for in one plain sentence, and exactly what it sends.
 pub const SWITCHES: [(Kind, &str, &str, &str); 4] = [
     (
@@ -126,6 +129,7 @@ pub fn consent() -> Consent {
 
 /// Records the player's answer. Waiting items of kinds now off are deleted at once.
 pub fn answer(choices: Choices) -> Result<Consent, String> {
+    gather();
     let home = home();
     let mut consent = Consent::load(&home);
     consent.answer(choices);
@@ -137,6 +141,7 @@ pub fn answer(choices: Choices) -> Result<Consent, String> {
 /// The exact JSON the next upload would send, under a line saying what it is. With nothing
 /// waiting, one example of each kind, made on this machine.
 pub fn preview() -> (String, String) {
+    gather();
     let home = home();
     let waiting = outbox::retain_allowed(&home).len();
     if waiting > 0 {
@@ -217,6 +222,7 @@ pub fn delete_my_data() -> Result<String, String> {
     let home = home();
     let mut consent = Consent::load(&home);
     outbox::clear(&home).map_err(|e| e.to_string())?;
+    gather::clear_profiles(&home).map_err(|e| e.to_string())?;
     let remote = match sunrise_launcher_telemetry::endpoint() {
         _ if consent.install_id.is_empty() => "Nothing was ever sent from here.",
         None => {
@@ -326,6 +332,7 @@ pub fn label(kind: Kind) -> &'static str {
 
 /// Sends what is waiting, if there is a server and the player allows it.
 pub fn send() -> Flush {
+    gather();
     match sunrise_launcher_telemetry::endpoint() {
         Some(url) => upload::flush(&home(), &url),
         None => Flush::Nothing,
@@ -339,6 +346,7 @@ pub fn send_in_background() -> std::thread::JoinHandle<()> {
 
 /// The status as `telemetry status` and the MCP tool give it.
 pub fn status_json() -> serde_json::Value {
+    gather();
     let consent = consent();
     serde_json::json!({
         "asked": !consent.needs_asking(),

@@ -65,6 +65,8 @@ impl Launcher {
                             let tx = self.tx.clone();
                             let elapsed = started.elapsed();
                             std::thread::spawn(move || {
+                                // An own profile's game kept its reports in that profile.
+                                sunrise_launcher::telemetry::gather();
                                 if let Err(error) = instances::finish_play(&played, elapsed, || {
                                     let _ = tx.send(Msg::PlayRecorded);
                                     sunrise_launcher::launch::run_after_exit(
