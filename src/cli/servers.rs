@@ -133,7 +133,7 @@ pub(super) fn servers(action: ServersCmd, as_json: bool) -> Result<(), Error> {
         }
         ServersCmd::SetUp { version } => {
             let tag = backend::resolve_version(version.as_deref())?;
-            servers::set_up(&tag)?;
+            servers::set_up(&tag).map_err(String::from)?;
             println!(
                 "Servers run Sunrise {}",
                 servers::runtime_release().unwrap_or(tag)
