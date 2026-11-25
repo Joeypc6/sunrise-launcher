@@ -232,17 +232,30 @@ pub fn render(theme: &Theme, window: &mut Window, cx: &mut App) -> Option<Div> {
     )
 }
 
+/// The edges a client-decorated Linux window is resized by: none when the compositor draws the
+/// frame (it resizes the window itself) or the window is maximized.
 #[cfg(target_os = "linux")]
 pub fn resize_handles(window: &Window) -> Option<Div> {
-    use gpui::{div, prelude::*, px, CursorStyle, Decorations, MouseButton, ResizeEdge};
+    use gpui::Decorations;
 
     if matches!(window.window_decorations(), Decorations::Server) || window.is_maximized() {
         return None;
     }
+    Some(resize_edges())
+}
 
-    let handle = |id, edge, cursor| {
+/// A thin grip along every edge and corner of the window, over what the window draws. It is
+/// pinned to the window's bounds (`inset_0`): the frame's root lays its children out in a
+/// block, so a box that only sized itself to the window sat below the page, outside the
+/// window, and no edge took a press (#474).
+#[cfg(target_os = "linux")]
+fn resize_edges() -> Div {
+    use gpui::{div, prelude::*, px, CursorStyle, MouseButton, ResizeEdge};
+
+    let handle = |id: &'static str, edge, cursor| {
         div()
             .id(id)
+            .debug_selector(move || id.into())
             .absolute()
             .cursor(cursor)
             .on_mouse_down(MouseButton::Left, move |_, window, _| {
@@ -250,72 +263,77 @@ pub fn resize_handles(window: &Window) -> Option<Div> {
             })
     };
 
-    Some(
-        div()
-            .absolute()
-            .size_full()
-            .child(
-                handle("resize-left", ResizeEdge::Left, CursorStyle::ResizeLeft)
-                    .left_0()
-                    .top(px(8.))
-                    .bottom(px(8.))
-                    .w(px(5.)),
-            )
-            .child(
-                handle("resize-right", ResizeEdge::Right, CursorStyle::ResizeRight)
-                    .right_0()
-                    .top(px(8.))
-                    .bottom(px(8.))
-                    .w(px(5.)),
-            )
-            .child(
-                handle("resize-bottom", ResizeEdge::Bottom, CursorStyle::ResizeDown)
-                    .bottom_0()
-                    .left(px(8.))
-                    .right(px(8.))
-                    .h(px(5.)),
-            )
-            .child(
-                handle(
-                    "resize-top-left",
-                    ResizeEdge::TopLeft,
-                    CursorStyle::ResizeUpLeftDownRight,
-                )
-                .left_0()
+    div()
+        .absolute()
+        .inset_0()
+        .child(
+            handle("resize-top", ResizeEdge::Top, CursorStyle::ResizeUp)
                 .top_0()
-                .size(px(8.)),
-            )
-            .child(
-                handle(
-                    "resize-top-right",
-                    ResizeEdge::TopRight,
-                    CursorStyle::ResizeUpRightDownLeft,
-                )
-                .right_0()
-                .top_0()
-                .size(px(8.)),
-            )
-            .child(
-                handle(
-                    "resize-bottom-left",
-                    ResizeEdge::BottomLeft,
-                    CursorStyle::ResizeUpRightDownLeft,
-                )
+                .left(px(8.))
+                .right(px(8.))
+                .h(px(5.)),
+        )
+        .child(
+            handle("resize-left", ResizeEdge::Left, CursorStyle::ResizeLeft)
                 .left_0()
-                .bottom_0()
-                .size(px(8.)),
-            )
-            .child(
-                handle(
-                    "resize-bottom-right",
-                    ResizeEdge::BottomRight,
-                    CursorStyle::ResizeUpLeftDownRight,
-                )
+                .top(px(8.))
+                .bottom(px(8.))
+                .w(px(5.)),
+        )
+        .child(
+            handle("resize-right", ResizeEdge::Right, CursorStyle::ResizeRight)
                 .right_0()
+                .top(px(8.))
+                .bottom(px(8.))
+                .w(px(5.)),
+        )
+        .child(
+            handle("resize-bottom", ResizeEdge::Bottom, CursorStyle::ResizeDown)
                 .bottom_0()
-                .size(px(8.)),
-            ),
-    )
+                .left(px(8.))
+                .right(px(8.))
+                .h(px(5.)),
+        )
+        .child(
+            handle(
+                "resize-top-left",
+                ResizeEdge::TopLeft,
+                CursorStyle::ResizeUpLeftDownRight,
+            )
+            .left_0()
+            .top_0()
+            .size(px(8.)),
+        )
+        .child(
+            handle(
+                "resize-top-right",
+                ResizeEdge::TopRight,
+                CursorStyle::ResizeUpRightDownLeft,
+            )
+            .right_0()
+            .top_0()
+            .size(px(8.)),
+        )
+        .child(
+            handle(
+                "resize-bottom-left",
+                ResizeEdge::BottomLeft,
+                CursorStyle::ResizeUpRightDownLeft,
+            )
+            .left_0()
+            .bottom_0()
+            .size(px(8.)),
+        )
+        .child(
+            handle(
+                "resize-bottom-right",
+                ResizeEdge::BottomRight,
+                CursorStyle::ResizeUpLeftDownRight,
+            )
+            .right_0()
+            .bottom_0()
+            .size(px(8.)),
+        )
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -546,3 +564,6 @@ mod windows {
 
 #[cfg(target_os = "windows")]
 pub use windows::render;
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests;
