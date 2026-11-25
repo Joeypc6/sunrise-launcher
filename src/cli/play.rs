@@ -1,5 +1,6 @@
 //! `play` and `server`: starting the game or a dedicated server in this terminal.
 use super::*;
+use sunrise_launcher::{jars, managed_play};
 
 pub(super) fn server(
     dir: Option<PathBuf>,
@@ -11,10 +12,10 @@ pub(super) fn server(
     let dir = backend::server_dir(dir);
     // The server inherits this terminal, so typed lines reach its console.
     let mut cmd = backend::server(&tag, &dir, accept_eula)?;
-    sunrise_launcher::jars::prepare_launch(
+    jars::prepare_launch(
         &mut cmd,
         &Default::default(),
-        sunrise_launcher::jars::Permission::headless(allow_jar_downloads),
+        jars::Permission::headless(allow_jar_downloads),
     )
     .map_err(|error| error.to_string())?;
     let (cmd, _runtime) = backend::prepare_server_command(&tag, &dir, cmd)?;
@@ -50,6 +51,10 @@ pub(super) struct PlayArgs {
     /// the one `account select` picked: several games can play as several accounts at once
     #[arg(long, value_name = "WHO")]
     pub(super) account: Option<String>,
+    /// If this play builds the profile's native mods, build the ones the registry did not
+    /// review too, such as files copied in by hand (asked again on every run)
+    #[arg(long)]
+    pub(super) trust_native_code: bool,
 }
 
 pub(super) fn client(args: PlayArgs) -> Result<i32, Error> {
@@ -62,17 +67,16 @@ pub(super) fn client(args: PlayArgs) -> Result<i32, Error> {
         server,
         arg,
         account,
+        trust_native_code,
     } = args;
+    if trust_native_code {
+        trust_unreviewed_builds();
+    }
     let instance = instances::for_play(instance.as_deref())?;
-    use sunrise_launcher::{jars, managed_play};
     let accounts = Accounts::load();
     let account = account
         .as_deref()
-        .map(|who| {
-            accounts.find(who).ok_or_else(|| {
-                format!("No signed-in account {who}. See `sunrise-launcher account`.")
-            })
-        })
+        .map(|who| accounts.find(who).ok_or_else(|| no_account(who)))
         .transpose()?;
     let selected = account.or_else(|| accounts.selected());
     let add_arguments = game_arguments(join, world, server, creative, arg, &instance.home);
@@ -130,6 +134,10 @@ pub(super) fn client(args: PlayArgs) -> Result<i32, Error> {
         );
     }
     played.map_err(Error::from)
+}
+
+fn no_account(who: &str) -> String {
+    format!("No signed-in account {who}. See `sunrise-launcher account`.")
 }
 
 /// What a run adds to the game's command line: a friend's world, a world, a server of the list

@@ -242,6 +242,19 @@ fn play_takes_an_account_for_one_launch() {
     }
 }
 
+/// Play's own build refuses unreviewed mods and names this flag (#472), so play takes it too.
+#[test]
+fn play_takes_trust_native_code_for_one_launch() {
+    let parse = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+        Some(Cmd::Play(play::PlayArgs {
+            trust_native_code, ..
+        })) => trust_native_code,
+        _ => panic!("not play"),
+    };
+    assert!(parse(&["sunrise-launcher", "play", "--trust-native-code"]));
+    assert!(!parse(&["sunrise-launcher", "play"]));
+}
+
 #[test]
 fn play_takes_extra_arguments_that_start_with_hyphens() {
     let cli = Cli::try_parse_from([
