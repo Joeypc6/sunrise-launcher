@@ -4,6 +4,9 @@ use crate::theme::Theme;
 use gpui::{App, Div, TitlebarOptions, Window};
 use sunrise_launcher::backend::Appearance;
 
+/// The drawn title bar's height, where there is one: the toast starts below it and the header.
+pub const HEIGHT: f32 = 32.;
+
 pub fn options() -> TitlebarOptions {
     TitlebarOptions {
         title: Some(sunrise_launcher::identity::WINDOW_TITLE.into()),
