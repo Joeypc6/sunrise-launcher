@@ -279,15 +279,16 @@ impl Launcher {
             .as_ref()
             .map_or(Page::Discover, |o| o.from);
         let parent = self.mods_state.open.as_ref().and_then(|o| o.parent.clone());
-        let parent_name = parent
-            .as_ref()
-            .and_then(|id| match &self.mods_state.v2_catalog {
+        let parent_name = parent.as_ref().and_then(|parent| match parent {
+            Parent::Project { name, .. } => Some(name.clone()),
+            Parent::Collection(id) => match &self.mods_state.v2_catalog {
                 V2Catalog::Ready { collections, .. } => collections
                     .iter()
                     .find(|c| c.id == *id)
                     .map(|c| c.name.clone()),
                 _ => None,
-            });
+            },
+        });
         let back_label = match (back_to, &parent_name) {
             (_, Some(name)) => name.clone(),
             (Page::Installed, _) => tr("Installed").to_string(),
@@ -301,9 +302,14 @@ impl Launcher {
             .child(
                 back(back_label).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     match &parent {
-                        Some(collection) => {
+                        Some(Parent::Collection(collection)) => {
                             this.mods_show_v2_collection(collection.clone(), back_to)
                         }
+                        Some(Parent::Project { id, parent, .. }) => this.mods_return_to_project(
+                            id.clone(),
+                            back_to,
+                            parent.as_deref().cloned(),
+                        ),
                         None => this.ui.page = back_to,
                     }
                     cx.notify();

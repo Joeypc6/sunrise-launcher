@@ -363,6 +363,12 @@ newer). A launcher running from one replaces the AppImage itself when it updates
 (`$APPIMAGE`), and the menu entry it writes starts the AppImage rather than the copy inside the
 image, which is gone when the launcher exits.
 
+Every command runs from the AppImage file itself, with no need to unpack it: the AppImage passes
+its arguments on to the launcher, and relative paths are read from the folder it was started in.
+For example, to write a native mod's `Cargo.lock`:
+
+    ./sunrise-launcher-linux-x86_64.AppImage native-lock path/to/my-mod
+
 On Linux a release build that starts writes its applications-menu entry only when there is
 none, or when the program the entry starts (its `TryExec`, else its `Exec`) no longer exists.
 An entry pointing at another launcher that works is left alone, so a test or development build
