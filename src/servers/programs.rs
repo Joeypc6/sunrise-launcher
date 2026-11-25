@@ -36,7 +36,37 @@ pub fn game_files_ready() -> bool {
 
 /// Whether an installed version can host: it ships `sunrise-server` and is prepared.
 pub fn can_host(tag: &str) -> Result<(), String> {
-    host_resources(tag).map(|_| ())
+    host_resources(tag).map(|_| ()).map_err(String::from)
+}
+
+/// Why the servers' programs couldn't be set up. Only [`SetUpError::NotPrepared`] is answered
+/// with Prepare; every other reason (a prepare already running, a file that couldn't be copied)
+/// is only said.
+#[derive(Debug, PartialEq)]
+pub enum SetUpError {
+    /// The version's game files aren't prepared yet.
+    NotPrepared(String),
+    Other(String),
+}
+
+impl std::fmt::Display for SetUpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotPrepared(message) | Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+impl From<String> for SetUpError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+impl From<SetUpError> for String {
+    fn from(error: SetUpError) -> Self {
+        error.to_string()
+    }
 }
 
 struct HostResources {
@@ -46,21 +76,21 @@ struct HostResources {
     folder: PathBuf,
 }
 
-fn host_resources(tag: &str) -> Result<HostResources, String> {
+fn host_resources(tag: &str) -> Result<HostResources, SetUpError> {
     if !backend::version_dir(tag).join(PROGRAM).is_file() {
-        return Err(trf(
+        return Err(SetUpError::Other(trf(
             "Sunrise {tag} has no server program. Install a newer game build first.",
             &[("tag", tag)],
-        ));
+        )));
     }
     let (owner, base) = backend::installed_resources_root(tag)?;
     let game_version = backend::hosting_game_version(&base)?;
     let folder = backend::resources_for_game(&base, &game_version);
     if !backend::prepared_at(&folder) {
-        return Err(format!(
+        return Err(SetUpError::NotPrepared(format!(
             "Sunrise {tag} isn't prepared yet: press Prepare on the Play page (it uses your own Minecraft {})",
             game_version
-        ));
+        )));
     }
     Ok(HostResources {
         owner,
@@ -72,7 +102,7 @@ fn host_resources(tag: &str) -> Result<HostResources, String> {
 
 /// Sets up the servers' programs from the installed version `tag` (if none are yet) and copies its
 /// prepared game files for them. Safe to run again: it only refreshes the game files.
-pub fn set_up(tag: &str) -> Result<(), String> {
+pub fn set_up(tag: &str) -> Result<(), SetUpError> {
     let resources = host_resources(tag)?;
     // Keep the base's prepared files stable while completing reports and copying them.
     let _preparation = backend::prepare_lock_at(&resources.base, &resources.owner)?;
@@ -89,6 +119,7 @@ pub fn set_up(tag: &str) -> Result<(), String> {
         &resources.game_version,
         &resources.folder,
     )
+    .map_err(SetUpError::Other)
 }
 
 /// Copies a release with its already validated version and prepared resource folder.

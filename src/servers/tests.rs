@@ -179,12 +179,21 @@ fn native_server_setup_uses_base_resources_and_native_programs() {
     fs::copy(&lock, native_dir.join("research-lock.json")).unwrap();
     // Only the base has resources; the native build need not duplicate them.
     assert!(can_host(native).is_err());
+    // Not prepared yet: the one reason Create offers Prepare for (#530).
+    assert!(matches!(set_up(native), Err(SetUpError::NotPrepared(_))));
     let resources = backend::resources(base);
     fs::create_dir_all(resources.join("nested")).unwrap();
     fs::write(resources.join("sunrise-resources.json"), "{}").unwrap();
     fs::write(resources.join("nested/data"), "base resources").unwrap();
     assert!(can_host(base).is_ok());
     assert!(can_host(native).is_ok());
+    // A prepare already running is no reason to press Prepare, in any language.
+    let (owner, root) = backend::installed_resources_root(native).unwrap();
+    let preparing = backend::prepare_lock_at(&root, &owner).unwrap();
+    let busy = set_up(native).unwrap_err();
+    assert!(matches!(busy, SetUpError::Other(_)), "{busy:?}");
+    assert_eq!(set_up_problem(busy).fix, None);
+    drop(preparing);
     set_up(native).unwrap();
     assert!(game_files_ready());
     assert!(create_blocked(None).is_none());
@@ -229,13 +238,19 @@ fn native_server_setup_uses_base_resources_and_native_programs() {
     ] {
         write_record(invalid);
         assert!(can_host(native).unwrap_err().contains("native-mods.json"));
-        assert!(set_up(native).unwrap_err().contains("native-mods.json"));
+        assert!(set_up(native)
+            .unwrap_err()
+            .to_string()
+            .contains("native-mods.json"));
     }
     let alias = backend::version_dir("base-symlink");
     point(&alias, outside.path()).unwrap();
     write_record("base-symlink");
     assert!(can_host(native).unwrap_err().contains("reinstall"));
-    assert!(set_up(native).unwrap_err().contains("reinstall"));
+    assert!(set_up(native)
+        .unwrap_err()
+        .to_string()
+        .contains("reinstall"));
     write_record(base);
     assert_eq!(
         fs::read_to_string(program().unwrap()).unwrap(),
@@ -262,7 +277,10 @@ fn native_server_setup_uses_base_resources_and_native_programs() {
         )
         .unwrap();
         assert!(can_host(native).unwrap_err().contains("research-lock.json"));
-        assert!(set_up(native).unwrap_err().contains("research-lock.json"));
+        assert!(set_up(native)
+            .unwrap_err()
+            .to_string()
+            .contains("research-lock.json"));
         assert_eq!(fs::read_to_string(&marker).unwrap(), "unrelated data");
         assert_eq!(
             fs::read_to_string(copied.join("nested/data")).unwrap(),
@@ -272,10 +290,16 @@ fn native_server_setup_uses_base_resources_and_native_programs() {
 
     // Both an incomplete install and an entirely missing base call for reinstalling it.
     fs::remove_file(base_dir.join(".installed")).unwrap();
-    assert!(set_up(native).unwrap_err().contains("reinstall"));
+    assert!(set_up(native)
+        .unwrap_err()
+        .to_string()
+        .contains("reinstall"));
     fs::remove_dir_all(&base_dir).unwrap();
     assert!(can_host(native).unwrap_err().contains("reinstall"));
-    assert!(set_up(native).unwrap_err().contains("reinstall"));
+    assert!(set_up(native)
+        .unwrap_err()
+        .to_string()
+        .contains("reinstall"));
     assert!(game_files_ready());
     assert!(create_blocked(None).is_none());
 }
@@ -878,4 +902,15 @@ fn the_copy_list_leaves_out_folders_without_a_readable_level_dat() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].1, home.join("saves/good"));
     fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn create_offers_prepare_only_for_game_files_not_yet_prepared() {
+    let not_prepared = SetUpError::NotPrepared("Sunrise v1 isn't prepared yet".into());
+    assert_eq!(set_up_problem(not_prepared).fix, Some(Fix::Prepare));
+    let busy = SetUpError::Other("Sunrise v1 is already being prepared.".into());
+    assert_eq!(set_up_problem(busy).fix, None);
+    // A copy error whose path happens to say "prepared" is still only a copy error.
+    let copy = SetUpError::Other("/home/me/prepared worlds/server: Permission denied".into());
+    assert_eq!(set_up_problem(copy).fix, None);
 }

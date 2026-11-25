@@ -140,6 +140,18 @@ pub fn create_blocked(tag: Option<&str>) -> Option<Problem> {
     (!set_up && tag.is_none()).then(|| Problem::plain(tr(NEEDS_VERSION)))
 }
 
+/// What the Create dialog says when the programs can't be set up: Prepare only when preparing
+/// is what's missing.
+pub(super) fn set_up_problem(error: SetUpError) -> Problem {
+    match error {
+        SetUpError::NotPrepared(message) => Problem {
+            message,
+            fix: Some(Fix::Prepare),
+        },
+        SetUpError::Other(message) => Problem::plain(message),
+    }
+}
+
 const NEEDS_VERSION: &str = "Install a Sunrise game build first, then prepare it.";
 
 /// Creates a server: its folder, the world (a copy when asked), `init` and the settings, then adds it to
@@ -154,16 +166,7 @@ pub fn create(spec: &NewServer, tag: Option<&str>, log: &dyn Fn(String)) -> Resu
     if program().is_none() || !game_files_ready() {
         let tag = tag.ok_or_else(|| Problem::plain(tr(NEEDS_VERSION)))?;
         log(format!("Setting up the server programs from Sunrise {tag}"));
-        set_up(tag).map_err(|e| {
-            if e.contains("prepared") {
-                Problem {
-                    message: e,
-                    fix: Some(Fix::Prepare),
-                }
-            } else {
-                Problem::plain(e)
-            }
-        })?;
+        set_up(tag).map_err(set_up_problem)?;
     }
     let name = if spec.name.trim().is_empty() {
         "My server".to_string()
