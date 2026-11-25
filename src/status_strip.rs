@@ -1,12 +1,16 @@
-//! The status strip: what Play is doing or what went wrong, with its one action, on every page
-//! except Home, whose fixed Play bar always shows this feedback. Source builds are said here
-//! on every page, Home included.
+//! The status strip, above the page on every tab: the work under way (`jobs`), each job in the
+//! same row (`list`), and, off Home, what went wrong with Play or waits on it, with its one
+//! action; Home's Play bar says that part itself.
 //! It is not drawn at all while there is nothing to tell (`launch_state::View::strip`).
 use super::*;
 use crate::frame::button;
 use crate::launch_state::{Act, Main, StripAct};
 use crate::paint::palette;
 use gpui::rgb;
+
+mod jobs;
+mod list;
+pub(crate) use jobs::Jobs;
 
 impl Launcher {
     /// A registry warning can coexist with progress, Stop, or a separate launch error.
@@ -43,60 +47,38 @@ impl Launcher {
         )
     }
 
-    /// The strip, for the frame to place above the page: one row, as wide as it is given.
+    /// The strip, for the frame to place above the page, as wide as it is given: the work under
+    /// way on every page, Home included, then (off Home) what failed or waits on Play.
     pub(crate) fn status_strip(&mut self, cx: &mut Context<Self>) -> Option<Div> {
-        use crate::mods_page::install::{stage_fraction, stage_label};
-        use sunrise_launcher::browser::sunrise::InstallProgress;
-        if let Some(activity) = self.source_activity() {
-            let step = activity.progress;
-            let label = match step {
-                InstallProgress::Publishing => tr("Finishing…").into(),
-                _ if activity.stopping => tr("Stopping…").into(),
-                InstallProgress::Tools { done, total } if total > 0 => trf(
-                    "Getting build tools · {done} of {total}",
-                    &[
-                        ("done", &sunrise_launcher::storage::format_bytes(done)),
-                        ("total", &sunrise_launcher::storage::format_bytes(total)),
-                    ],
-                ),
-                InstallProgress::Building(_) => trf(
-                    "Building {mods}…",
-                    &[("mods", &crate::mods::names(activity.names))],
-                ),
-                _ => stage_label(step),
-            };
-            let label = if step == InstallProgress::Publishing || activity.stopping {
-                label
-            } else {
-                crate::eta::with_eta(label, self.registry_eta())
-            };
-            let stop = (step != InstallProgress::Publishing && !activity.stopping).then(|| {
-                button("nightly-source-stop", tr("Stop")).on_click(cx.listener(|this, _, _, cx| {
-                    this.stop_source();
-                    cx.notify();
-                }))
-            });
-            let fraction = stage_fraction(step).map(|f| (f, f));
-            return Some(
-                strip()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .child(div().truncate().child(label))
-                            .child(crate::widgets::progress_bar(fraction, &self.theme)),
-                    )
-                    .children(stop),
-            );
+        let jobs = self.jobs();
+        let said = self.said_strip(!jobs.is_empty(), cx);
+        let work = (!jobs.is_empty()).then(|| self.jobs_strip(&jobs, cx));
+        if work.is_none() && said.is_none() {
+            return None;
         }
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .children(work)
+                .children(said),
+        )
+    }
+
+    /// Play's own line off Home: what failed, a held update or the game running, with its one
+    /// action. Work under way is the job list's (`covered`); this says it only for work no job
+    /// describes.
+    fn said_strip(&mut self, covered: bool, cx: &mut Context<Self>) -> Option<Div> {
         if self.ui.page == crate::frame::Page::Home {
             return None;
         }
         self.refresh_home_inventory(cx);
         let view = self.launch_facts().view();
+        if covered && view.main.under_way() {
+            return None;
+        }
         let Some((says, act)) = view.strip() else {
             // Nothing runs or failed. A build that just ended in the background is said here
             // for a moment, with nothing to press.
@@ -174,11 +156,13 @@ impl Launcher {
 
 /// The strip's own plate: one row, as wide as it is given.
 fn strip() -> Div {
+    plate().flex().items_center().gap(px(12.))
+}
+
+/// The plate every strip is drawn on.
+fn plate() -> Div {
     div()
         .flex_none()
-        .flex()
-        .items_center()
-        .gap(px(12.))
         .min_h(px(tokens::ACTION))
         .px(px(14.))
         .py(px(6.))

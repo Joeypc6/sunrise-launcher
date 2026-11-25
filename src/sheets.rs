@@ -197,11 +197,11 @@ impl Launcher {
         if self.ui.sheet == Some(Sheet::GithubAdd) {
             self.github.close();
         }
-        if self.ui.sheet == Some(Sheet::Switching) {
-            self.cancel_switch();
-        }
-        if self.ui.sheet == Some(Sheet::SwitchProvider) {
-            self.cancel_provider_switch();
+        if matches!(
+            self.ui.sheet,
+            Some(Sheet::Switching | Sheet::SwitchProvider)
+        ) {
+            self.hide_switch();
         }
         if let Some(pending) = self.ui.sheets.unreviewed.take() {
             pending.refuse();

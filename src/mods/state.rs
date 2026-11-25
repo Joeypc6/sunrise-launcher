@@ -306,6 +306,13 @@ impl Launcher {
         self.mutating()
     }
 
+    /// The Mods page's own change under way (a Modrinth mod or pack, a data pack, mods turned
+    /// on): its line and how far it is, for the status strip.
+    pub(crate) fn mods_change(&self) -> Option<(&str, f32)> {
+        let (line, fraction) = self.mods_state.busy.as_ref()?;
+        Some((line.as_str(), *fraction))
+    }
+
     /// Whether a mod change is in progress (mine or the shared install's), for the shared Play
     /// and setup gates. Reads only the Mods busy flags, never the launch state.
     pub(crate) fn mutating(&self) -> bool {
