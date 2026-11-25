@@ -277,7 +277,7 @@ impl Launcher {
             .px(px(14.))
             .min_h(px(52.))
             .border_t_1()
-            .border_color(c(palette().divider))
+            .border_color(palette().rule())
             .when(selected, |d| d.bg(c(palette().selected)))
             // The mod another page opened Installed at.
             .when(

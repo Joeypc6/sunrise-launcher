@@ -137,7 +137,7 @@ pub(crate) fn row(id: impl Into<ElementId>) -> Stateful<Div> {
         .gap(px(8.))
         .px(px(6.))
         .border_b_1()
-        .border_color(rgb(palette().divider))
+        .border_color(palette().rule())
         .hover(|s| s.bg(rgb(palette().chrome_raised)))
 }
 
@@ -168,7 +168,7 @@ impl Launcher {
             .overflow_x_scroll()
             .track_scroll(&scroll)
             .border_b_1()
-            .border_color(rgb(palette().divider));
+            .border_color(palette().rule());
         for tab in Tab::ALL {
             let selected = tab == active;
             strip = strip.child(
@@ -329,7 +329,7 @@ impl Launcher {
             .bg(palette().chrome_plate())
             .border_1()
             // The subtle outline the search field has.
-            .border_color(palette().input_edge())
+            .border_color(palette().plate_edge())
             .px(px(inset - 1.))
             .child(strip)
             .child(

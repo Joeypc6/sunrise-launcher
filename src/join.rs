@@ -359,7 +359,7 @@ impl Launcher {
             .px(px(14.))
             .py(px(10.))
             .border_t_1()
-            .border_color(rgb(palette().divider))
+            .border_color(palette().rule())
             // The picture the server sends wins; until it does, the bundled one.
             .child(server_picture(
                 server
@@ -501,7 +501,7 @@ impl Launcher {
             .px(px(14.))
             .py(px(10.))
             .border_t_1()
-            .border_color(rgb(palette().divider))
+            .border_color(palette().rule())
             .child(picture)
             .child(
                 div()

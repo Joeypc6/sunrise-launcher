@@ -258,7 +258,7 @@ impl Launcher {
                     bar.flex_wrap().py(px(7.)).gap_y(px(6.))
                 })
                 .border_b_1()
-                .border_color(c(palette().divider))
+                .border_color(palette().rule())
                 .child(select_all);
             if n_sel == 0 {
                 bar = bar
@@ -509,7 +509,7 @@ impl Launcher {
                 &self.theme,
             ))
             .children((hidden > 0).then(|| {
-                div().px(px(14.)).py(px(8.)).border_t_1().border_color(c(palette().divider)).child(muted(trf(
+                div().px(px(14.)).py(px(8.)).border_t_1().border_color(palette().rule()).child(muted(trf(
                     "{count} other files the launcher installed (packs, or from other sources) aren't listed here.",
                     &[("count", &hidden.to_string())],
                 )))

@@ -318,7 +318,7 @@ impl Launcher {
             .px(px(14.))
             .py(px(10.))
             .border_t_1()
-            .border_color(c(palette().divider))
+            .border_color(palette().rule())
             .when(open, |d| d.cursor_pointer())
             .child(match open {
                 true => tick,

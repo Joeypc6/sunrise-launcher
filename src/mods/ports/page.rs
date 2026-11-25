@@ -267,7 +267,7 @@ impl Launcher {
                                                         crate::tokens::R_SMALL,
                                                     ))
                                                     .border_1()
-                                                    .border_color(c(palette().divider))
+                                                    .border_color(palette().rule())
                                                     .bg(c(palette().field))
                                                     .font_family(crate::theme::MONO)
                                                     .text_size(px(tokens::CAPTION))

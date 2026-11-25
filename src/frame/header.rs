@@ -82,7 +82,7 @@ impl Launcher {
             .h(px(tokens::HEADER))
             .rounded(crate::tokens::r(crate::tokens::R_PANEL))
             .border_1()
-            .border_color(rgb(p.divider))
+            .border_color(p.rule())
             .bg(p.chrome_plate())
             .child(tabs)
             .child(

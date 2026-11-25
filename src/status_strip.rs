@@ -185,7 +185,7 @@ fn strip() -> Div {
         .rounded(crate::tokens::r(crate::tokens::R_CARD))
         .bg(palette().card())
         .border_1()
-        .border_color(rgb(palette().divider))
+        .border_color(palette().rule())
         .text_size(px(tokens::LABEL))
         .text_color(rgb(palette().text))
 }

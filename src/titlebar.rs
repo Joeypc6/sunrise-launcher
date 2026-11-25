@@ -137,7 +137,7 @@ pub fn render(theme: &Theme, window: &mut Window, cx: &mut App) -> Option<Div> {
         .bg(crate::paint::palette().chrome_plate())
         .text_color(theme.muted)
         .border_b_1()
-        .border_color(gpui::rgb(crate::paint::palette().divider))
+        .border_color(crate::paint::palette().rule())
         .child(drag);
 
     if controls.minimize {
@@ -544,7 +544,7 @@ mod windows {
                 .bg(crate::paint::palette().chrome_plate())
                 .text_color(theme.muted)
                 .border_b_1()
-                .border_color(gpui::rgb(crate::paint::palette().divider))
+                .border_color(crate::paint::palette().rule())
                 .child(drag)
                 .child(
                     div()

@@ -84,7 +84,7 @@ impl Launcher {
             .p(px(16.))
             .rounded(tokens::r(tokens::R_CARD))
             .border_1()
-            .border_color(rgb(palette().divider))
+            .border_color(palette().rule())
             .bg(palette().card())
             .child(
                 div()
@@ -211,7 +211,7 @@ impl Launcher {
             panel = panel.child(hint(tr("No game address is available through Tailscale.")));
         }
         panel = panel
-            .child(div().h(px(1.)).bg(rgb(palette().divider)))
+            .child(div().h(px(1.)).bg(palette().rule()))
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
@@ -387,7 +387,7 @@ impl Launcher {
                             .gap(px(12.))
                             .pt(px(8.))
                             .border_t_1()
-                            .border_color(rgb(palette().divider))
+                            .border_color(palette().rule())
                             .child(
                                 div()
                                     .flex_1()

@@ -255,7 +255,7 @@ impl Launcher {
             .gap_x(px(16.))
             .gap_y(px(8.))
             .border_b_1()
-            .border_color(gpui::rgb(palette().divider))
+            .border_color(palette().rule())
             .child(
                 segmented(
                     "alt-mods-tabs",

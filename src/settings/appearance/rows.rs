@@ -441,8 +441,6 @@ impl Launcher {
         };
         let about = if !self.settings.scenery() {
             tr("Turn on scenery to see how the backdrop shows through panels.")
-        } else if chosen.is_some() && actual > percent {
-            tr("This theme stays more opaque so its text remains readable.")
         } else {
             tr("How much of the backdrop shows through cards and panels.")
         };

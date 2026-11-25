@@ -336,7 +336,7 @@ impl Launcher {
                 .overflow_y_scroll()
                 .rounded(crate::tokens::r(tokens::R_CARD))
                 .border_1()
-                .border_color(rgb(palette().divider))
+                .border_color(palette().rule())
                 .children(pick.input.rows().into_iter().enumerate().map(
                     |(i, (id, name, version))| {
                         let id = id.to_owned();
@@ -349,9 +349,7 @@ impl Launcher {
                             .px(px(12.))
                             .h(px(48.))
                             .cursor_pointer()
-                            .when(i > 0, |r| {
-                                r.border_t_1().border_color(rgb(palette().divider))
-                            })
+                            .when(i > 0, |r| r.border_t_1().border_color(palette().rule()))
                             .hover(|s| s.bg(rgb(palette().hover)))
                             .child(
                                 crate::mods::checkbox(
