@@ -127,6 +127,8 @@ fn v2_edit_with(
     let edit = profile.begin_edit(choose, |f| {
         (hooks.install.progress)(InstallProgress::Downloading(f))
     })?;
+    // The game build is in: say the checks that follow, not its last percentage.
+    (hooks.install.progress)(InstallProgress::Checking);
     let base_build = edit.base().to_owned();
     let default_cancelled = native_mods::Cancellation::default();
     let cancelled = hooks.install.cancellation.unwrap_or(&default_cancelled);
@@ -212,6 +214,9 @@ fn v2_edit_with(
         pending_pins.push(pin);
     }
     doc.write(next.path())?;
+    // The releases are in: what follows checks them and fetches their original jars, so it says
+    // so rather than staying on the last download's percentage (sunrise-org/sunrise-launcher#376).
+    (hooks.install.progress)(InstallProgress::Checking);
 
     // Check enabled manifests and v2 revocations on the staged candidate before any build.
     check_staged_v2_candidate(next.path(), &index, |id| entries.contains_key(id))?;

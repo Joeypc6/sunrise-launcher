@@ -509,6 +509,8 @@ pub fn remove_mods(
     let edit = profile.begin_edit(choose, |f| {
         (hooks.progress)(InstallProgress::Downloading(f))
     })?;
+    // The game build is in: say the checks that follow, not its last percentage.
+    (hooks.progress)(InstallProgress::Checking);
     edit.prepare_first(&super::preparation_line(hooks.progress))?;
     let old = edit.candidate()?;
     let next = edit.candidate()?;
