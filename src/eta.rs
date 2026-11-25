@@ -176,44 +176,75 @@ pub(crate) fn install_stage_key(step: InstallProgress) -> u8 {
     }
 }
 
-/// Format a remaining duration in calm, coarsely rounded words so it never jitters every second.
-pub(crate) fn format_eta(remaining: Duration) -> String {
+/// A remaining duration rounded into calm, coarse steps so the text never jitters every second.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Left {
+    FewSeconds,
+    Seconds(u64),
+    Minutes(u64),
+    Hours(u64, u64),
+}
+
+fn rounded(remaining: Duration) -> Left {
     let secs = remaining
         .as_secs()
         .saturating_add(u64::from(remaining.subsec_nanos() >= 500_000_000));
     if secs < 5 {
-        return tr("A few seconds left").into();
+        return Left::FewSeconds;
     }
     if secs <= 52 {
-        let rounded = ((secs.saturating_add(2) / 5) * 5).clamp(5, 50);
-        return trf(
-            "About {seconds} sec left",
-            &[("seconds", &rounded.to_string())],
-        );
+        return Left::Seconds(((secs.saturating_add(2) / 5) * 5).clamp(5, 50));
     }
     if secs <= 89 {
-        return tr("About 1 min left").into();
+        return Left::Minutes(1);
     }
     let total_mins = secs.saturating_add(30) / 60;
     if total_mins < 60 {
-        return trf(
-            "About {minutes} min left",
-            &[("minutes", &total_mins.to_string())],
-        );
+        return Left::Minutes(total_mins);
     }
-    let hours = total_mins / 60;
-    let mins = total_mins % 60;
-    if mins == 0 {
-        trf("About {hours} hr left", &[("hours", &hours.to_string())])
-    } else {
-        trf(
+    Left::Hours(total_mins / 60, total_mins % 60)
+}
+
+/// Format a remaining duration as a sentence, as the sheets say it: "About 2 min left".
+pub(crate) fn format_eta(remaining: Duration) -> String {
+    match rounded(remaining) {
+        Left::FewSeconds => tr("A few seconds left").into(),
+        Left::Seconds(seconds) => trf(
+            "About {seconds} sec left",
+            &[("seconds", &seconds.to_string())],
+        ),
+        Left::Minutes(1) => tr("About 1 min left").into(),
+        Left::Minutes(minutes) => trf(
+            "About {minutes} min left",
+            &[("minutes", &minutes.to_string())],
+        ),
+        Left::Hours(hours, 0) => trf("About {hours} hr left", &[("hours", &hours.to_string())]),
+        Left::Hours(hours, minutes) => trf(
             "About {hours} hr {minutes} min left",
             &[
                 ("hours", &hours.to_string()),
-                ("minutes", &mins.to_string()),
+                ("minutes", &minutes.to_string()),
             ],
-        )
+        ),
     }
+}
+
+/// The same rounded duration as the status strip says it: "ETA: 2 min".
+pub(crate) fn eta_label(remaining: Duration) -> String {
+    let duration = match rounded(remaining) {
+        Left::FewSeconds => tr("a few seconds").to_string(),
+        Left::Seconds(seconds) => trf("{seconds} sec", &[("seconds", &seconds.to_string())]),
+        Left::Minutes(minutes) => trf("{minutes} min", &[("minutes", &minutes.to_string())]),
+        Left::Hours(hours, 0) => trf("{hours} hr", &[("hours", &hours.to_string())]),
+        Left::Hours(hours, minutes) => trf(
+            "{hours} hr {minutes} min",
+            &[
+                ("hours", &hours.to_string()),
+                ("minutes", &minutes.to_string()),
+            ],
+        ),
+    };
+    trf("ETA: {duration}", &[("duration", &duration)])
 }
 
 /// Append a formatted ETA to a status line when one is available.
@@ -418,6 +449,17 @@ mod tests {
         );
         // Huge duration never overflows.
         let _ = format_eta(Duration::MAX);
+    }
+
+    #[test]
+    fn the_strip_says_the_same_rounded_time_as_an_eta() {
+        assert_eq!(eta_label(Duration::from_secs(3)), "ETA: a few seconds");
+        assert_eq!(eta_label(Duration::from_secs(18)), "ETA: 20 sec");
+        assert_eq!(eta_label(Duration::from_secs(60)), "ETA: 1 min");
+        assert_eq!(eta_label(Duration::from_secs(150)), "ETA: 3 min");
+        assert_eq!(eta_label(Duration::from_secs(3600)), "ETA: 1 hr");
+        assert_eq!(eta_label(Duration::from_secs(4500)), "ETA: 1 hr 15 min");
+        let _ = eta_label(Duration::MAX);
     }
 
     #[test]

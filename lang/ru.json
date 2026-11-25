@@ -2483,5 +2483,11 @@
   "Removing mods from {profile}": "Removing mods from {profile}",
   "Updating mods in {profile}": "Updating mods in {profile}",
   "Installing mods in {profile}": "Installing mods in {profile}",
-  "Switched to {build}.": "Switched to {build}."
+  "Switched to {build}.": "Switched to {build}.",
+  "ETA: {duration}": "ETA: {duration}",
+  "a few seconds": "a few seconds",
+  "{seconds} sec": "{seconds} sec",
+  "{minutes} min": "{minutes} min",
+  "{hours} hr": "{hours} hr",
+  "{hours} hr {minutes} min": "{hours} hr {minutes} min"
 }

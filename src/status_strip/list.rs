@@ -78,8 +78,8 @@ impl Launcher {
             .children(extra)
     }
 
-    /// A job's words over its bar: "Installing Nov 17 · Downloading", and "42% · About 2 min
-    /// left" at the end of the line.
+    /// A job's words over its bar: "Installing Nov 17 · Downloading", and "42% · ETA: 2 min" at
+    /// the end of the line.
     fn job_text(&self, job: &Job) -> Div {
         let line = match &job.step {
             Some(step) => trf("{what} · {step}", &[("what", &job.what), ("step", step)]),
@@ -88,10 +88,13 @@ impl Launcher {
         let percent = job
             .fraction
             .map(|f| trf("{value}%", &[("value", &format!("{:.0}", f * 100.))]));
-        let meta = match (percent, job.eta) {
-            (Some(percent), eta) => Some(crate::eta::with_eta(percent, eta)),
-            (None, Some(eta)) => Some(crate::eta::format_eta(eta)),
-            (None, None) => None,
+        let eta = job.eta.map(crate::eta::eta_label);
+        let meta = match (percent, eta) {
+            (Some(percent), Some(eta)) => Some(trf(
+                "{status} · {eta}",
+                &[("status", &percent), ("eta", &eta)],
+            )),
+            (percent, eta) => percent.or(eta),
         };
         div()
             .flex_1()
