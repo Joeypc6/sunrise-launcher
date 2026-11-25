@@ -205,31 +205,7 @@ fn rounded(remaining: Duration) -> Left {
     Left::Hours(total_mins / 60, total_mins % 60)
 }
 
-/// Format a remaining duration as a sentence, as the sheets say it: "About 2 min left".
-pub(crate) fn format_eta(remaining: Duration) -> String {
-    match rounded(remaining) {
-        Left::FewSeconds => tr("A few seconds left").into(),
-        Left::Seconds(seconds) => trf(
-            "About {seconds} sec left",
-            &[("seconds", &seconds.to_string())],
-        ),
-        Left::Minutes(1) => tr("About 1 min left").into(),
-        Left::Minutes(minutes) => trf(
-            "About {minutes} min left",
-            &[("minutes", &minutes.to_string())],
-        ),
-        Left::Hours(hours, 0) => trf("About {hours} hr left", &[("hours", &hours.to_string())]),
-        Left::Hours(hours, minutes) => trf(
-            "About {hours} hr {minutes} min left",
-            &[
-                ("hours", &hours.to_string()),
-                ("minutes", &minutes.to_string()),
-            ],
-        ),
-    }
-}
-
-/// The same rounded duration as the status strip says it: "ETA: 2 min".
+/// A remaining duration as every progress line says it: "ETA: 2 min".
 pub(crate) fn eta_label(remaining: Duration) -> String {
     let duration = match rounded(remaining) {
         Left::FewSeconds => tr("a few seconds").to_string(),
@@ -252,7 +228,7 @@ pub(crate) fn with_eta(label: String, remaining: Option<Duration>) -> String {
     match remaining {
         Some(duration) => trf(
             "{status} · {eta}",
-            &[("status", &label), ("eta", &format_eta(duration))],
+            &[("status", &label), ("eta", &eta_label(duration))],
         ),
         None => label,
     }
@@ -435,30 +411,16 @@ mod tests {
     }
 
     #[test]
-    fn format_eta_uses_calm_coarse_buckets() {
-        assert_eq!(format_eta(Duration::from_secs(3)), "A few seconds left");
-        assert_eq!(format_eta(Duration::from_secs(7)), "About 5 sec left");
-        assert_eq!(format_eta(Duration::from_secs(18)), "About 20 sec left");
-        assert_eq!(format_eta(Duration::from_secs(52)), "About 50 sec left");
-        assert_eq!(format_eta(Duration::from_secs(60)), "About 1 min left");
-        assert_eq!(format_eta(Duration::from_secs(150)), "About 3 min left");
-        assert_eq!(format_eta(Duration::from_secs(3600)), "About 1 hr left");
-        assert_eq!(
-            format_eta(Duration::from_secs(4500)),
-            "About 1 hr 15 min left"
-        );
-        // Huge duration never overflows.
-        let _ = format_eta(Duration::MAX);
-    }
-
-    #[test]
-    fn the_strip_says_the_same_rounded_time_as_an_eta() {
+    fn eta_label_rounds_into_calm_coarse_steps() {
         assert_eq!(eta_label(Duration::from_secs(3)), "ETA: a few seconds");
+        assert_eq!(eta_label(Duration::from_secs(7)), "ETA: 5 sec");
         assert_eq!(eta_label(Duration::from_secs(18)), "ETA: 20 sec");
+        assert_eq!(eta_label(Duration::from_secs(52)), "ETA: 50 sec");
         assert_eq!(eta_label(Duration::from_secs(60)), "ETA: 1 min");
         assert_eq!(eta_label(Duration::from_secs(150)), "ETA: 3 min");
         assert_eq!(eta_label(Duration::from_secs(3600)), "ETA: 1 hr");
         assert_eq!(eta_label(Duration::from_secs(4500)), "ETA: 1 hr 15 min");
+        // A huge duration never overflows.
         let _ = eta_label(Duration::MAX);
     }
 
