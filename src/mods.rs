@@ -152,7 +152,7 @@ mod enabled_tests {
 }
 
 #[cfg(test)]
-mod home_tests;
+pub(crate) mod home_tests;
 
 #[cfg(test)]
 mod installed_refresh_tests {

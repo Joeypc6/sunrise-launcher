@@ -37,18 +37,6 @@ impl Launcher {
         extra: Option<Stateful<Div>>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let line = match &job.step {
-            Some(step) => trf("{what} · {step}", &[("what", &job.what), ("step", step)]),
-            None => job.what.clone(),
-        };
-        let percent = job
-            .fraction
-            .map(|f| trf("{value}%", &[("value", &format!("{:.0}", f * 100.))]));
-        let meta = match (percent, job.eta) {
-            (Some(percent), eta) => Some(crate::eta::with_eta(percent, eta)),
-            (None, Some(eta)) => Some(crate::eta::format_eta(eta)),
-            (None, None) => None,
-        };
         let show = job.show.map(|act| {
             button(gpui::ElementId::named_usize("job-open", n), tr("Open")).on_click(cx.listener(
                 move |this, _, _, cx| {
@@ -84,33 +72,49 @@ impl Launcher {
                     .rounded_full()
                     .bg(rgb(palette().accent)),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(div().flex_1().min_w_0().truncate().child(line))
-                            .children(meta.map(|meta| {
-                                div()
-                                    .flex_none()
-                                    .text_color(rgb(palette().muted))
-                                    .child(meta)
-                            })),
-                    )
-                    .child(crate::widgets::progress_bar(
-                        job.fraction.map(|f| (f, f)),
-                        &self.theme,
-                    )),
-            )
+            .child(self.job_text(job))
             .children(show)
             .children(stop)
             .children(extra)
+    }
+
+    /// A job's words over its bar: "Installing Nov 17 · Downloading", and "42% · About 2 min
+    /// left" at the end of the line.
+    fn job_text(&self, job: &Job) -> Div {
+        let line = match &job.step {
+            Some(step) => trf("{what} · {step}", &[("what", &job.what), ("step", step)]),
+            None => job.what.clone(),
+        };
+        let percent = job
+            .fraction
+            .map(|f| trf("{value}%", &[("value", &format!("{:.0}", f * 100.))]));
+        let meta = match (percent, job.eta) {
+            (Some(percent), eta) => Some(crate::eta::with_eta(percent, eta)),
+            (None, Some(eta)) => Some(crate::eta::format_eta(eta)),
+            (None, None) => None,
+        };
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(div().flex_1().min_w_0().truncate().child(line))
+                    .children(meta.map(|meta| {
+                        div()
+                            .flex_none()
+                            .text_color(rgb(palette().muted))
+                            .child(meta)
+                    })),
+            )
+            .child(crate::widgets::progress_bar(
+                job.fraction.map(|f| (f, f)),
+                &self.theme,
+            ))
     }
 }

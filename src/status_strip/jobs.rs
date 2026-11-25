@@ -95,12 +95,12 @@ pub(crate) struct Jobs {
 }
 
 impl Launcher {
-    /// Every piece of work under way, the one Play waits for first.
+    /// Every piece of work under way: switches first, then what Play waits for, then the rest.
     pub(crate) fn jobs(&mut self) -> Vec<Job> {
         let mut jobs = Vec::new();
+        self.switch_jobs(&mut jobs);
         self.game_jobs(&mut jobs);
         self.mod_jobs(&mut jobs);
-        self.switch_jobs(&mut jobs);
         self.other_jobs(&mut jobs);
         let now = Instant::now();
         let measured = &mut self.jobs.measured;
@@ -118,11 +118,11 @@ impl Launcher {
 
     /// The game build's download, its preparation and the game starting.
     fn game_jobs(&self, jobs: &mut Vec<Job>) {
-        let switching = self.switch_download();
+        let downloading = self.switch_download();
         if let Some((tag, fraction)) = self
             .installing
             .as_ref()
-            .filter(|(tag, _)| switching != Some(tag.as_str()))
+            .filter(|(tag, _)| downloading != Some(tag.as_str()))
         {
             let stopping = self.install_stop.as_ref().is_some_and(|s| s.is_stopped());
             let job = Job::new(
@@ -143,7 +143,9 @@ impl Launcher {
                 None => job,
             });
         }
-        if self.preparing {
+        // A build switch prepares its build itself, and its own row says each step.
+        let switching = jobs.iter().any(|job| job.key == "switch");
+        if self.preparing && !switching {
             jobs.push(prepare_job());
         } else if self.starting_client.is_some() || self.play_admission.is_some() {
             let step = self.play_step.map_or(Main::Starting, Main::Step);

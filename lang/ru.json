@@ -2482,5 +2482,6 @@
   "Setting up the server": "Setting up the server",
   "Removing mods from {profile}": "Removing mods from {profile}",
   "Updating mods in {profile}": "Updating mods in {profile}",
-  "Installing mods in {profile}": "Installing mods in {profile}"
+  "Installing mods in {profile}": "Installing mods in {profile}",
+  "Switched to {build}.": "Switched to {build}."
 }

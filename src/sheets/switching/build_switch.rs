@@ -322,6 +322,7 @@ impl Launcher {
     ) {
         let running = self.ui.sheets.switching.running.take();
         let stopped = running.as_ref().is_some_and(|run| run.stop.is_stopped());
+        let tag = running.as_ref().map(|run| run.tag.clone());
         let back = running.and_then(|run| run.back);
         let result = if result.is_err() && stopped {
             Ok(Switched::Stayed)
@@ -351,6 +352,9 @@ impl Launcher {
                     self.open_sheet(Sheet::BuildChanges);
                 } else if visible {
                     self.close_sheet();
+                } else if let Some(tag) = tag {
+                    // Its sheet was hidden: the status strip's row is gone, so say it ended.
+                    toast::say(trf("Switched to {build}.", &[("build", &build_name(&tag))]));
                 }
             }
             Ok(Switched::Stayed) => {

@@ -11,6 +11,8 @@ use gpui::rgb;
 mod jobs;
 mod list;
 pub(crate) use jobs::Jobs;
+#[cfg(test)]
+mod tests;
 
 impl Launcher {
     /// A registry warning can coexist with progress, Stop, or a separate launch error.
@@ -125,17 +127,7 @@ impl Launcher {
             div()
                 .flex_none()
                 .w(px(120.))
-                .h(px(4.))
-                .rounded(crate::tokens::r(crate::tokens::R_BAR))
-                .bg(rgb(palette().line))
-                .overflow_hidden()
-                .child(
-                    div()
-                        .h(px(4.))
-                        .rounded(crate::tokens::r(crate::tokens::R_BAR))
-                        .bg(rgb(palette().accent))
-                        .w(relative(progress.clamp(0.03, 1.))),
-                )
+                .child(crate::build::progress_bar(progress))
         });
         Some(
             strip()
