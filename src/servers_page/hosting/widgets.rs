@@ -27,7 +27,7 @@ pub(super) fn card() -> Div {
         .flex_col()
         .rounded(crate::tokens::r(crate::tokens::R_CARD))
         .border_1()
-        .border_color(rgb(palette().divider))
+        .border_color(palette().rule())
         .bg(palette().card())
 }
 

@@ -287,6 +287,11 @@ pub fn newer_release<'a>(
         .map(|(_, r)| r)
 }
 
+/// The verified catalogue's index, when one can be read.
+pub fn current_index() -> Option<Arc<Index>> {
+    index().ok().map(|catalog| catalog.index)
+}
+
 /// Returns the verified v2 catalogue, reusing an in-memory copy from the last ten minutes for the
 /// same endpoint, otherwise fetching and verifying against [`REGISTRY_KEYS`].
 pub fn index() -> Result<Catalog, LoadError> {

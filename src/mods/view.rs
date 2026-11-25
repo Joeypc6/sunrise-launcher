@@ -95,32 +95,10 @@ impl Launcher {
         }
     }
 
-    /// The strip shown above either list: progress, or the last result.
+    /// The line shown above either list: the last result. Work under way is the status strip's,
+    /// on every page, so this page draws no second bar for it.
     pub(super) fn strip(&self, cx: &mut Context<Self>) -> Option<Div> {
         use ui::{c, muted};
-        // Registry installs use the global strip and the clicked card, not a third bar here.
-        if let Some((line, f)) = self.mods_state.busy.clone() {
-            return Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .child(div().text_size(px(tokens::LABEL)).child(line))
-                    .child(
-                        div()
-                            .h(px(4.))
-                            .rounded(crate::tokens::r(crate::tokens::R_BAR))
-                            .bg(c(palette().line))
-                            .child(
-                                div()
-                                    .h(px(4.))
-                                    .rounded(crate::tokens::r(crate::tokens::R_BAR))
-                                    .bg(c(palette().text))
-                                    .w(relative(f.clamp(0.02, 1.))),
-                            ),
-                    ),
-            );
-        }
         let notice = self.notice()?;
         let (text, color) = match notice {
             Ok(t) => (t, palette().text),
@@ -255,7 +233,7 @@ impl Launcher {
             .gap_x(px(16.))
             .gap_y(px(8.))
             .border_b_1()
-            .border_color(gpui::rgb(palette().divider))
+            .border_color(palette().rule())
             .child(
                 segmented(
                     "alt-mods-tabs",

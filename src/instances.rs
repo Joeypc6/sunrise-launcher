@@ -52,79 +52,6 @@ pub enum Kind {
     Pack,
 }
 
-/// What an instance shows in the sidebar: a block or item texture from the player's prepared
-/// files (never shipped), or a colour.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Icon {
-    /// A texture name: `grass_block` (block/ is looked in first, then item/).
-    Texture(String),
-    /// `#rrggbb`.
-    Colour(String),
-}
-
-impl Icon {
-    /// `#3fa7d6` is a colour; a texture's name is lowercase letters, digits and `_`.
-    pub fn parse(text: &str) -> Result<Icon, String> {
-        let text = text.trim();
-        if let Some(hex) = text.strip_prefix('#') {
-            if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Ok(Icon::Colour(format!("#{}", hex.to_ascii_lowercase())));
-            }
-        } else if texture_name(text) {
-            return Ok(Icon::Texture(text.into()));
-        }
-        Err(format!(
-            "{text}: give a block or item name (grass_block) or a colour (#3fa7d6)"
-        ))
-    }
-
-    /// The texture's file in prepared resources, if it is a texture they hold. Only a name
-    /// [`Icon::parse`] takes is looked for, and only a file that really is inside the resources'
-    /// textures is answered: a name with a path in it, or a link leading out, reads nothing.
-    pub fn texture(&self, resources: &Path) -> Option<PathBuf> {
-        let Icon::Texture(name) = self else {
-            return None;
-        };
-        if !texture_name(name) {
-            return None;
-        }
-        let textures = resources
-            .join("assets/minecraft/textures")
-            .canonicalize()
-            .ok()?;
-        ["block", "item"]
-            .iter()
-            .filter_map(|kind| {
-                textures
-                    .join(kind)
-                    .join(format!("{name}.png"))
-                    .canonicalize()
-                    .ok()
-            })
-            .find(|p| p.starts_with(&textures) && p.is_file())
-    }
-}
-
-/// A texture's name: lowercase letters, digits and `_`, so never a path.
-fn texture_name(text: &str) -> bool {
-    !text.is_empty()
-        && text
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
-// A saved icon is held to what the dialog and the command line take; one that isn't is no icon,
-// and never a reason to lose the instance's other choices.
-fn saved_icon<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Icon>, D::Error> {
-    let saved: Option<Icon> =
-        serde_json::from_value(serde_json::Value::deserialize(deserializer)?).ok();
-    Ok(saved.filter(|icon| match icon {
-        Icon::Texture(name) => texture_name(name),
-        Icon::Colour(hex) => Icon::parse(hex).as_ref() == Ok(icon),
-    }))
-}
-
 /// The most a picture drawn as artwork (a profile's, a world's, a texture) is read: one a game
 /// or the launcher wrote is far smaller.
 pub const MAX_ARTWORK: u64 = 8 << 20;
@@ -203,185 +130,78 @@ pub fn adopt_icon(home: &Path, url: &str) {
     }
 }
 
-// A malformed preference must not invalidate unrelated instance metadata.
-fn saved_profile<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<crate::native_mods::Profile>, D::Error> {
-    Ok(serde_json::from_value(serde_json::Value::deserialize(deserializer)?).ok())
-}
+pub use sunrise_launcher_domain::{Channel, Icon, Meta};
 
-/// Which builds an instance's "latest" follows. Missing in a saved instance: Nightly, so nobody
-/// is moved to an older build.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Channel {
-    Stable,
-    #[default]
-    Nightly,
-    Dev,
-}
-
-impl Channel {
-    /// Publication channels, not a classifier for arbitrary tags the player has on disk.
-    pub fn of_release(release: &backend::Release) -> Option<Self> {
-        use sunrise_launcher_release_verify::{Channel as SignedChannel, NIGHTLY};
-        match release.nightly.as_deref() {
-            Some(NIGHTLY) => Some(Self::Nightly),
-            Some(tag)
-                if release.prerelease && SignedChannel::of(tag) == Some(SignedChannel::Dev) =>
-            {
-                Some(Self::Dev)
-            }
-            None if !release.prerelease && backend::is_game_tag(&release.tag) => Some(Self::Stable),
-            _ => None,
-        }
+/// The texture's file in prepared resources, if it is a texture they hold. Only a name
+/// [`Icon::parse`] takes is looked for, and only a file that really is inside the resources'
+/// textures is answered: a name with a path in it, or a link leading out, reads nothing.
+pub fn icon_texture(icon: &Icon, resources: &Path) -> Option<PathBuf> {
+    let Icon::Texture(name) = icon else {
+        return None;
+    };
+    if !sunrise_launcher_domain::is_texture_name(name) {
+        return None;
     }
-
-    /// Installed builds can be classified even if their releases have been pruned.
-    pub fn of_build(tag: &str) -> Option<Self> {
-        if crate::nightly::date_of(tag).is_some() {
-            Some(Self::Nightly)
-        } else if backend::dev_date(tag).is_some() {
-            Some(Self::Dev)
-        } else if backend::is_game_tag(tag) {
-            Some(Self::Stable)
-        } else {
-            None
-        }
-    }
-
-    /// The installed build on this channel, from the newest-first on-disk list. A test build
-    /// from a draft's files is chosen only by its exact tag, never as the newest.
-    pub fn newest_installed(self, installed: &[String]) -> Option<&String> {
-        installed.iter().find(|tag| {
-            Self::of_build(tag) == Some(self) && !crate::draft_releases::is_test_build(tag)
+    let textures = resources
+        .join("assets/minecraft/textures")
+        .canonicalize()
+        .ok()?;
+    ["block", "item"]
+        .iter()
+        .filter_map(|kind| {
+            textures
+                .join(kind)
+                .join(format!("{name}.png"))
+                .canonicalize()
+                .ok()
         })
-    }
+        .find(|p| p.starts_with(&textures) && p.is_file())
+}
 
-    /// The downloadable releases on this channel, in catalogue order (newest first).
-    pub fn builds(self, releases: &[backend::Release]) -> impl Iterator<Item = &backend::Release> {
-        releases
-            .iter()
-            .filter(move |r| r.asset.is_some() && Self::of_release(r) == Some(self))
-    }
+/// The installed build on this channel, from the newest-first on-disk list. A test build
+/// from a draft's files is chosen only by its exact tag, never as the newest.
+pub fn newest_installed(channel: Channel, installed: &[String]) -> Option<&String> {
+    installed.iter().find(|tag| {
+        Channel::of_build(tag) == Some(channel) && !crate::draft_releases::is_test_build(tag)
+    })
+}
 
-    /// The target of an unpinned profile: stay on an installed build until the player updates.
-    /// A Stable install keeps working without the catalogue. Before there is one, the profile
-    /// can play Nightly while there is no downloadable Stable, without changing its channel.
-    pub fn play_target<'a>(
-        self,
-        releases: &'a [backend::Release],
-        installed: &'a [String],
-        nightly: Option<&'a String>,
-        selected: Option<&'a String>,
-    ) -> Option<&'a String> {
-        let latest = self.builds(releases).next().map(|release| &release.tag);
-        let have = match self {
-            Self::Stable | Self::Dev => self.newest_installed(installed),
-            Self::Nightly => nightly,
-        };
-        match (have, latest) {
-            // The newest published build wins a same-day tie once it is actually on disk.
-            (Some(have), Some(latest))
-                if installed.contains(latest)
-                    && backend::compare_game_versions(latest, have).is_ge() =>
-            {
-                Some(latest)
-            }
-            (Some(have), _) => Some(have),
-            (None, Some(latest)) => Some(latest),
-            (None, None) if self == Self::Stable => {
-                Self::Nightly.play_target(releases, installed, nightly, selected)
-            }
-            (None, None) if self == Self::Nightly => {
-                selected.filter(|tag| Self::of_build(tag).is_none())
-            }
-            (None, None) => None,
+/// The target of an unpinned profile: stay on an installed build until the player updates.
+/// A Stable install keeps working without the catalogue. Before there is one, the profile
+/// can play Nightly while there is no downloadable Stable, without changing its channel.
+///
+/// This reads the launcher's draft test-build mark through [`newest_installed`], so it stays
+/// here beside the other instance state rather than in the pure `launcher-domain` crate.
+pub fn play_target<'a>(
+    channel: Channel,
+    releases: &'a [backend::Release],
+    installed: &'a [String],
+    nightly: Option<&'a String>,
+    selected: Option<&'a String>,
+) -> Option<&'a String> {
+    let latest = channel.builds(releases).next().map(|release| &release.tag);
+    let have = match channel {
+        Channel::Stable | Channel::Dev => newest_installed(channel, installed),
+        Channel::Nightly => nightly,
+    };
+    match (have, latest) {
+        // The newest published build wins a same-day tie once it is actually on disk.
+        (Some(have), Some(latest))
+            if installed.contains(latest)
+                && backend::compare_game_versions(latest, have).is_ge() =>
+        {
+            Some(latest)
         }
-    }
-
-    /// What an unpinned profile follows for now. Without a Stable download it plays Nightly
-    /// without changing the saved channel; Stable takes over when one becomes available.
-    pub fn following(self, releases: &[backend::Release]) -> Self {
-        if self == Self::Stable && self.builds(releases).next().is_none() {
-            Self::Nightly
-        } else {
-            self
+        (Some(have), _) => Some(have),
+        (None, Some(latest)) => Some(latest),
+        (None, None) if channel == Channel::Stable => {
+            play_target(Channel::Nightly, releases, installed, nightly, selected)
         }
+        (None, None) if channel == Channel::Nightly => {
+            selected.filter(|tag| Channel::of_build(tag).is_none())
+        }
+        (None, None) => None,
     }
-}
-
-// An unknown channel must not invalidate unrelated instance metadata.
-fn saved_channel<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Channel>, D::Error> {
-    Ok(serde_json::from_value(serde_json::Value::deserialize(deserializer)?).ok())
-}
-
-fn saved_choice_id<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<[u8; 16]>, D::Error> {
-    Ok(serde_json::from_value(serde_json::Value::deserialize(deserializer)?).ok())
-}
-
-/// The player's choices about one instance.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Meta {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "saved_icon",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub icon: Option<Icon>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
-    /// The Sunrise version this instance plays, kept when newer ones are installed. None: the
-    /// launcher's own version, which follows updates.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    /// The builds "latest" means for it; missing is [`Channel::Nightly`].
-    #[serde(
-        default,
-        deserialize_with = "saved_channel",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub channel: Option<Channel>,
-    /// The last committed switch build choice already reflected (or superseded) here.
-    #[serde(
-        default,
-        deserialize_with = "saved_choice_id",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub(crate) build_choice_applied: Option<[u8; 16]>,
-    /// This instance's saved native build choice; missing or unknown starts at Optimized.
-    #[serde(
-        default,
-        deserialize_with = "saved_profile",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub native_profile: Option<crate::native_mods::Profile>,
-    /// Seconds played in it, every run started by the launcher (the window or `play`) added up.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub played_secs: u64,
-    /// When its last run ended, in seconds since 1970.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_played: Option<u64>,
-    /// What runs around the game: a pre-launch command, a wrapper, variables (`launch`).
-    #[serde(default, skip_serializing_if = "Launch::is_empty")]
-    pub launch: Launch,
-    /// Set by an earlier launcher for a Minecraft: Java Edition instance. This launcher no
-    /// longer starts those: such an instance is not listed, and its record is kept exactly as it
-    /// was, whatever it holds, whenever `instances.json` is saved.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub java: Option<serde_json::Value>,
-    /// The same earlier launcher's put-aside Java settings of an instance that played Sunrise
-    /// meanwhile: kept as it was.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub java_kept: Option<serde_json::Value>,
-    #[serde(flatten)]
-    other: BTreeMap<String, serde_json::Value>,
 }
 
 impl Instance {
@@ -389,10 +209,6 @@ impl Instance {
     pub fn vars(&self) -> crate::launch::Vars {
         crate::launch::instance_vars(&self.name, &self.id, &self.home)
     }
-}
-
-fn is_zero(n: &u64) -> bool {
-    *n == 0
 }
 
 /// `instances.json`: each instance's choices, by id.
@@ -543,13 +359,11 @@ fn initialize_default_in(game_home: &Path, data: &Path) -> Result<(), String> {
         use std::io::Write as _;
 
         let store = Store {
-            instances: BTreeMap::from([(
-                DEFAULT.to_owned(),
-                Meta {
-                    channel: Some(Channel::Stable),
-                    ..Meta::default()
-                },
-            )]),
+            instances: BTreeMap::from([(DEFAULT.to_owned(), {
+                let mut meta = Meta::default();
+                meta.channel = Some(Channel::Stable);
+                meta
+            })]),
             ..Store::default()
         };
         let bytes = serde_json::to_vec_pretty(&store).map_err(|e| format!("{FILE}: {e}"))?;
@@ -636,9 +450,9 @@ impl Instance {
                 let selected = backend::Settings::load().selected;
                 let (installed, nightly) = backend::play_installations(selected.as_deref());
                 let selected = selected.filter(|tag| installed.contains(tag));
-                self.channel
-                    .play_target(
-                        &[],
+                play_target(
+                    self.channel,
+                    &[],
                         &installed,
                         nightly.as_ref(),
                         selected.as_ref().or(installed.first()),

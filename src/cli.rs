@@ -73,6 +73,19 @@ struct Cli {
     command: Option<Cmd>,
 }
 
+/// The `--profile` value. [`native_mods::Profile`] lives in the launcher's pure type crate, which
+/// stays free of clap, so the command line parses its own one-variant name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum ProfileArg {
+    Optimized,
+}
+
+impl From<ProfileArg> for native_mods::Profile {
+    fn from(_: ProfileArg) -> Self {
+        Self::Optimized
+    }
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     /// Write a shell completion script to stdout

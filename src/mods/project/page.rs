@@ -106,7 +106,7 @@ impl Launcher {
                 .py(px(2.))
                 .rounded(crate::tokens::r(crate::tokens::R_SMALL))
                 .border_1()
-                .border_color(c(p.divider))
+                .border_color(p.rule())
                 .bg(c(p.field))
                 .text_size(px(tokens::CAPTION))
                 .text_color(c(p.muted))
@@ -248,7 +248,7 @@ impl Launcher {
                 };
                 list = list.child(
                     self.release_row(("release-row", idx), &vp.id, line, cx)
-                        .when(idx > 0, |d| d.border_t_1().border_color(c(p.divider)))
+                        .when(idx > 0, |d| d.border_t_1().border_color(p.rule()))
                         .child(
                             div()
                                 .flex()
@@ -292,7 +292,7 @@ impl Launcher {
                 list = list.child(
                     self.release_row(("other-release-row", idx), &vp.id, line, cx)
                         .border_t_1()
-                        .border_color(c(p.divider))
+                        .border_color(p.rule())
                         .opacity(0.75)
                         .child(
                             div()
@@ -470,9 +470,9 @@ impl Launcher {
                 d.children(vp.fit.reason().map(note))
             })
             .children(controls)
-            .child(div().h(px(1.)).bg(c(p.divider)))
+            .child(div().h(px(1.)).bg(p.rule()))
             .child(self.rating_block(&vp.id, cx))
-            .child(div().h(px(1.)).bg(c(p.divider)))
+            .child(div().h(px(1.)).bg(p.rule()))
             .child(
                 div()
                     .flex()
@@ -619,7 +619,7 @@ impl Launcher {
             .gap(px(12.))
             .px(px(14.))
             .py(px(10.))
-            .when(n > 0, |d| d.border_t_1().border_color(c(p.divider)))
+            .when(n > 0, |d| d.border_t_1().border_color(p.rule()))
             .child(tile(picture, &id, &name, 36.))
             .child(
                 div()
@@ -721,7 +721,7 @@ impl Launcher {
                         .cursor_pointer()
                         .rounded(crate::tokens::r(crate::tokens::R_CONTROL))
                         .border_1()
-                        .border_color(c(p.divider))
+                        .border_color(p.rule())
                         .bg(p.card())
                         .overflow_hidden()
                         .when(!viewing, |d| d.tooltip(crate::glass_ui::tip(tip_text)))

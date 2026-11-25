@@ -308,7 +308,7 @@ impl Launcher {
                     .gap(px(16.))
                     .px(px(14.))
                     .py(px(10.))
-                    .when(i > 0, |d| d.border_t_1().border_color(c(palette().divider)))
+                    .when(i > 0, |d| d.border_t_1().border_color(palette().rule()))
                     .text_size(px(tokens::LABEL))
                     .child(
                         div()

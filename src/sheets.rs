@@ -197,11 +197,11 @@ impl Launcher {
         if self.ui.sheet == Some(Sheet::GithubAdd) {
             self.github.close();
         }
-        if self.ui.sheet == Some(Sheet::Switching) {
-            self.cancel_switch();
-        }
-        if self.ui.sheet == Some(Sheet::SwitchProvider) {
-            self.cancel_provider_switch();
+        if matches!(
+            self.ui.sheet,
+            Some(Sheet::Switching | Sheet::SwitchProvider)
+        ) {
+            self.hide_switch();
         }
         if let Some(pending) = self.ui.sheets.unreviewed.take() {
             pending.refuse();
@@ -507,14 +507,14 @@ mod tests {
             following_now(Channel::Stable, waits)
         };
         // The marked row is the channel whose build Play starts.
-        let plays = Channel::Stable.play_target(&releases, &[], None, None);
+        let plays = instances::play_target(Channel::Stable, &releases, &[], None, None);
         assert_eq!(marked(&releases), Channel::Nightly);
         assert_eq!(
             plays.and_then(|tag| Channel::of_build(tag)),
             Some(Channel::Nightly)
         );
         releases.push(release("26.3-0.1.0", false));
-        let plays = Channel::Stable.play_target(&releases, &[], None, None);
+        let plays = instances::play_target(Channel::Stable, &releases, &[], None, None);
         assert_eq!(marked(&releases), Channel::Stable);
         assert_eq!(
             plays.and_then(|tag| Channel::of_build(tag)),

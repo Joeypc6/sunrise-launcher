@@ -49,7 +49,10 @@ impl Launcher {
             card => {
                 if let Some(hold) = self.registry_install_hold(id) {
                     return Some(Outcome {
-                        failure: Some((hold.label(), hold.detail())),
+                        failure: Some((
+                            installed::hold_label(&hold),
+                            installed::hold_detail(&hold),
+                        )),
                         ..Outcome::default()
                     });
                 }
@@ -122,6 +125,22 @@ impl Launcher {
             .running
             .as_ref()
             .and_then(|run| run.eta.remaining(Instant::now()))
+    }
+}
+
+impl Launcher {
+    /// What the install under way does, for the status strip: "Updating mods in Survival".
+    pub(crate) fn registry_title(&self) -> Option<String> {
+        let run = self.mods.installs.running.as_ref()?;
+        let kinds = || run.requests.iter().map(|request| request.kind);
+        let profile = [("profile", run.profile.name.as_str())];
+        Some(if kinds().all(|kind| kind == Kind::Remove) {
+            trf("Removing mods from {profile}", &profile)
+        } else if kinds().all(|kind| matches!(kind, Kind::UpdateV2 | Kind::UpdateAllV2)) {
+            trf("Updating mods in {profile}", &profile)
+        } else {
+            trf("Installing mods in {profile}", &profile)
+        })
     }
 }
 
@@ -198,7 +217,7 @@ pub(super) fn notice_failure(notice: &BuildNotice, card: &str) -> (String, Strin
     let this = notice.changes.iter().find(|change| change.project == card);
     let label = match this {
         Some(change) if change.predecessor.is_some() => tr("Kept the working version").into(),
-        Some(change) => change.reason.label(),
+        Some(change) => installed::hold_label(&change.reason),
         None => tr("Some mods stayed off or kept their old version").into(),
     };
     let detail = notice
@@ -210,7 +229,7 @@ pub(super) fn notice_failure(notice: &BuildNotice, card: &str) -> (String, Strin
                 &[
                     ("mod", &change.title),
                     ("disposition", &change.disposition()),
-                    ("reason", &change.reason.detail()),
+                    ("reason", &installed::hold_detail(&change.reason)),
                 ],
             )
         })

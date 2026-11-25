@@ -80,8 +80,8 @@ impl Launcher {
         let status_cell: AnyElement = if switch_held {
             div().into_any_element()
         } else if let Some(hold) = install_hold {
-            let detail = hold.detail();
-            status("warning", hold.label(), palette().warning)
+            let detail = installed::hold_detail(hold);
+            status("warning", installed::hold_label(hold), palette().warning)
                 .id(("alt-row-install-hold", n))
                 .reach()
                 .min_w_0()
@@ -277,7 +277,7 @@ impl Launcher {
             .px(px(14.))
             .min_h(px(52.))
             .border_t_1()
-            .border_color(c(palette().divider))
+            .border_color(palette().rule())
             .when(selected, |d| d.bg(c(palette().selected)))
             // The mod another page opened Installed at.
             .when(

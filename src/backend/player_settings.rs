@@ -94,8 +94,9 @@ impl WhilePlaying {
 pub const DEFAULT_CORNER_RADIUS: u8 = 9;
 pub const MAX_CORNER_RADIUS: u8 = 30;
 
-/// Custom panel opacity, in whole percentages. Unset keeps the theme's existing opacity.
-pub const PANEL_OPACITY_MIN: u8 = 82;
+/// Custom panel opacity, in whole percentages. Unset keeps the theme's existing opacity. The whole
+/// range is the player's: at 0% the panels are gone, and text over a bright backdrop may not read.
+pub const PANEL_OPACITY_MIN: u8 = 0;
 pub const PANEL_OPACITY_MAX: u8 = 100;
 
 /// Explicit permission to build one GitHub source mod. A rename within the same owner
@@ -242,7 +243,7 @@ impl Settings {
         self.panel_opacity
     }
 
-    /// Choose a custom panel opacity, within the safe range, or reset to the theme's default.
+    /// Choose a custom panel opacity, from 0 to 100%, or reset to the theme's default.
     pub fn set_panel_opacity(&mut self, opacity: Option<u8>) {
         self.panel_opacity =
             opacity.map(|percent| percent.clamp(PANEL_OPACITY_MIN, PANEL_OPACITY_MAX));

@@ -171,7 +171,7 @@ impl Launcher {
             Some(icon @ Icon::Texture(name)) if picture.is_none() => {
                 self.version_of(i).cloned().and_then(|tag| {
                     self.icon_image(format!("texture:{tag}:{name}"), size, || {
-                        icon.texture(&backend::resources(&tag))
+                        instances::icon_texture(icon, &backend::resources(&tag))
                     })
                 })
             }
@@ -442,7 +442,7 @@ impl Launcher {
             .rounded(crate::tokens::r(crate::tokens::R_PANEL))
             .bg(p.chrome_plate())
             .border_1()
-            .border_color(rgb(p.divider))
+            .border_color(p.rule())
             .text_color(rgb(p.chrome_text))
             .child(toggle)
             .child(add)

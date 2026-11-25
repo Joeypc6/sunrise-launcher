@@ -553,7 +553,7 @@ impl Launcher {
                 .rounded(crate::tokens::r(crate::tokens::R_CARD))
                 .border_1()
                 .border_dashed()
-                .border_color(rgb(p.divider))
+                .border_color(p.rule())
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(p.hover)))
                 .child(blocks::icon("plus", 20., self.theme.muted))

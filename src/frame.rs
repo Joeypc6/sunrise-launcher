@@ -117,7 +117,7 @@ impl Launcher {
                         .flex()
                         .items_center()
                         .border_b_1()
-                        .border_color(rgb(palette().divider))
+                        .border_color(palette().rule())
                         .child(
                             segmented(
                                 "servers-tabs",
@@ -228,7 +228,7 @@ impl Launcher {
             .when(page != Page::Home, |d| {
                 d.bg(palette().chrome_plate())
                     .border_1()
-                    .border_color(rgb(palette().divider))
+                    .border_color(palette().rule())
             })
             .overflow_hidden()
             .children(status)

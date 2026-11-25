@@ -226,7 +226,7 @@ pub(crate) fn card() -> Div {
     div()
         .bg(palette().card())
         .border_1()
-        .border_color(rgb(palette().divider))
+        .border_color(palette().rule())
         .rounded(crate::tokens::r(crate::tokens::R_CARD))
         .overflow_hidden()
 }
@@ -661,7 +661,7 @@ impl Launcher {
             .max_w(px(340.))
             .rounded(crate::tokens::r(crate::tokens::R_CONTROL))
             .border_1()
-            .border_color(palette().input_edge())
+            .border_color(palette().plate_edge())
             .bg(palette().card())
             .reach_edge()
             .cursor_pointer()

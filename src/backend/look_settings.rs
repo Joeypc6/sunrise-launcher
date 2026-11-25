@@ -114,8 +114,10 @@ mod tests {
             .unwrap()
             .get("panel_opacity")
             .is_none());
-        let clamped = Settings::parse(r#"{"panel_opacity":0,"game_args":"--x"}"#);
-        assert_eq!(clamped.panel_opacity, Some(PANEL_OPACITY_MIN));
+        // 0% is a choice like any other, read back as 0 and not raised.
+        let clear = Settings::parse(r#"{"panel_opacity":0,"game_args":"--x"}"#);
+        assert_eq!(clear.panel_opacity, Some(PANEL_OPACITY_MIN));
+        assert_eq!(clear.panel_opacity, Some(0));
         let maximum = Settings::parse(r#"{"panel_opacity":100,"game_args":"--x"}"#);
         assert_eq!(maximum.panel_opacity, Some(PANEL_OPACITY_MAX));
         let saved = serde_json::to_string(&maximum).unwrap();

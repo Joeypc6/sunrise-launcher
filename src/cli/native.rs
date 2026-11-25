@@ -1,6 +1,19 @@
 //! `native-build`: building a profile's native mods, their catalogs and internals, or a server engine.
 use super::*;
 
+/// The `--profile` value. [`native_mods::Profile`] lives in the launcher's pure type crate, which
+/// stays free of clap, so the command line parses its own one-variant name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(super) enum ProfileArg {
+    Optimized,
+}
+
+impl From<ProfileArg> for native_mods::Profile {
+    fn from(_: ProfileArg) -> Self {
+        Self::Optimized
+    }
+}
+
 // `native-build`'s options, read by clap as they were from the variant's own fields.
 #[derive(clap::Args)]
 pub(super) struct NativeBuildArgs {
@@ -46,7 +59,7 @@ pub(super) struct NativeBuildArgs {
     /// Native mods use the pinned SDK's optimized compilation settings.
     /// The game is never rebuilt by a mod build.
     #[arg(long, value_enum)]
-    pub(super) profile: Option<native_mods::Profile>,
+    pub(super) profile: Option<ProfileArg>,
     /// Build the horizon-mixins tool from its pinned source instead of downloading the
     /// prebuilt one: for CI, which keeps that path proven
     #[arg(long, hide = true)]
@@ -67,6 +80,7 @@ pub(super) fn build(args: NativeBuildArgs) -> Result<i32, Error> {
         profile,
         mixins_from_source,
     } = args;
+    let profile = profile.map(native_mods::Profile::from);
     native_mods::mixins_from_source(mixins_from_source);
     if catalog {
         native_permission(trust_native_code)?;

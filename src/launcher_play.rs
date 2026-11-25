@@ -189,6 +189,7 @@ impl Launcher {
             }
             Msg::Installed(tag, result) => {
                 self.installing = None;
+                let stopped = (self.install_stop.take()).is_some_and(|stop| stop.is_stopped());
                 self.bar = (0., 0.);
                 self.refresh_installed();
                 if let Some(warning) = self.record_nightly_receipt_outcome(&tag, &result) {
@@ -241,6 +242,8 @@ impl Launcher {
                             });
                         }
                     }
+                    // Stopped from the status strip: what was downloaded stays for next time.
+                    Err(_) if stopped => toast::say(tr("Download stopped.")),
                     Err(e) => self.install_error = Some((tag, e)),
                 }
                 if let Some((intent, _)) =
@@ -289,6 +292,8 @@ impl Launcher {
         }
         let (release, tx) = (release.clone(), self.tx.clone());
         let tag = release.tag.clone();
+        let stop = stop.unwrap_or_default();
+        self.install_stop = Some(stop.clone());
         self.installing = Some((tag.clone(), 0.0));
         self.install_started = Some(Instant::now());
         self.bar = (0., 0.);
@@ -297,7 +302,7 @@ impl Launcher {
             let progress = |p| {
                 let _ = tx.send(Msg::Progress(tag.clone(), p));
             };
-            let result = backend::install_cancellable(&release, stop.as_ref(), progress);
+            let result = backend::install_cancellable(&release, Some(&stop), progress);
             let _ = tx.send(Msg::Installed(tag, result));
         });
     }
@@ -459,6 +464,7 @@ impl Launcher {
                 accepted_account: intent.account.as_deref(),
                 explicit_account: false,
                 piped: true,
+                registry: sunrise_launcher::browser::sunrise::v2::current_index,
             }
             .start_with_recovery(
                 recovery,

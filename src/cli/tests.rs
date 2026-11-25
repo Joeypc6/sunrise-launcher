@@ -153,16 +153,16 @@ fn settings_choose_the_look_as_appearance_does() {
 }
 
 #[test]
-fn panel_opacity_sets_a_clamped_percent_and_can_reset() {
+fn panel_opacity_takes_every_percent_and_can_reset() {
     let mut settings = backend::Settings::default();
     assert!(settings_json(&settings)["panel_opacity"].is_null());
     let cli = Cli::try_parse_from(["sunrise-launcher", "settings", "panel-opacity", "0"]);
     assert!(cli.is_ok());
+    // 0 is saved as 0, not raised to a floor.
     set_setting(&mut settings, "panel-opacity", "0").unwrap();
-    assert_eq!(
-        settings_json(&settings)["panel_opacity"],
-        backend::PANEL_OPACITY_MIN
-    );
+    assert_eq!(settings_json(&settings)["panel_opacity"], 0);
+    set_setting(&mut settings, "panel-opacity", "40").unwrap();
+    assert_eq!(settings.panel_opacity, Some(40));
     set_setting(&mut settings, "panel-opacity", "100").unwrap();
     assert_eq!(settings.panel_opacity, Some(backend::PANEL_OPACITY_MAX));
     for bad in ["-1", "101", "80.5", "opaque"] {
@@ -433,7 +433,10 @@ fn native_build_export_mode_needs_a_folder_and_refuses_an_instance() {
             version, profile, ..
         })) => {
             assert_eq!(version.as_deref(), Some("v2026.10.13"));
-            assert_eq!(profile, Some(native_mods::Profile::Optimized));
+            assert_eq!(
+                profile.map(native_mods::Profile::from),
+                Some(native_mods::Profile::Optimized)
+            );
         }
         _ => panic!("expected native-build"),
     }

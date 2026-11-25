@@ -98,7 +98,7 @@ impl Launcher {
         });
     }
 
-    pub(in crate::sheets) fn cancel_provider_switch(&mut self) {
+    pub(crate) fn cancel_provider_switch(&mut self) {
         let Some(running) = &mut self.ui.sheets.switching.provider else {
             return;
         };
@@ -127,11 +127,13 @@ impl Launcher {
         reply: Sender<bool>,
     ) {
         if let Some(running) =
-            self.ui.sheets.switching.provider.as_mut().filter(|run| {
-                self.ui.sheet == Some(Sheet::SwitchProvider) && !run.stop.is_stopped()
-            })
+            (self.ui.sheets.switching.provider.as_mut()).filter(|run| !run.stop.is_stopped())
         {
             running.question = Some((preview, reply));
+            // As a build switch's: a hidden switch comes back for its answer.
+            if self.ui.sheet.is_none() {
+                self.open_sheet(Sheet::SwitchProvider);
+            }
         } else {
             let _ = reply.send(false);
         }
@@ -322,12 +324,19 @@ impl Launcher {
                         running.eta.remaining(Instant::now()),
                     )
                 }))
-                .children(
-                    stage_fraction(running.progress)
-                        .map(|f| crate::widgets::progress_bar(Some((f, f)), &self.theme)),
-                )
+                .child(crate::widgets::progress_bar(
+                    stage_fraction(running.progress).map(|f| (f, f)),
+                    &self.theme,
+                ))
                 .child(muted(tr("Your current port stays intact if you cancel.")))
-                .child(div().flex().justify_end().child(cancel))
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.))
+                        .child(hide_button("hide-provider-switch", cx))
+                        .child(cancel),
+                )
         };
         Some(frame("provider-switch-sheet", 560., body, cx))
     }

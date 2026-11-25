@@ -56,7 +56,7 @@ impl Launcher {
                 .cursor_pointer()
                 .rounded(crate::tokens::r(crate::tokens::R_CONTROL))
                 .border_1()
-                .border_color(c(palette().divider))
+                .border_color(palette().rule())
                 .bg(palette().card())
                 .overflow_hidden()
                 .when(!viewing, |d| d.tooltip(crate::glass_ui::tip(label)))
@@ -458,7 +458,7 @@ impl Launcher {
                 .gap(px(8.))
                 .rounded(crate::tokens::r(crate::tokens::R_CONTROL))
                 .border_1()
-                .border_color(c(palette().divider))
+                .border_color(palette().rule())
                 .child(super::discover::install_fact(&row.version, pending))
                 .into_any_element()
         };

@@ -262,9 +262,7 @@ impl Launcher {
                 .items_center()
                 .gap(px(12.))
                 .px(px(16.))
-                .when(shown > 0, |d| {
-                    d.border_t_1().border_color(c(palette().divider))
-                })
+                .when(shown > 0, |d| d.border_t_1().border_color(palette().rule()))
                 // The pack another page opened the shelf at.
                 .when(
                     self.mods_state

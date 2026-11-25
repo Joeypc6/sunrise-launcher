@@ -286,7 +286,7 @@ impl Launcher {
             .px(px(28.))
             .py(px(16.))
             .border_t_1()
-            .border_color(rgb(palette().divider))
+            .border_color(palette().rule())
             .child(said.flex_1().min_w_0())
             .children(prepare)
             .child(self.host_button(

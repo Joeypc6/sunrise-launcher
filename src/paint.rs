@@ -11,8 +11,10 @@
 //! Every `u32` is an opaque `0xRRGGBB`, so a field, a menu, a selection or a tooltip reads on
 //! its own, whatever is behind it. Only the plates are see-through: [`Palette::card`] and
 //! [`Palette::chrome_plate`] take the scene or photo's tint. Automatic opacity guards against
-//! the theme's sky and stays solid over a photo. An explicit opacity fits ink against the worst
-//! possible backdrop instead. Without scenery the plates stay solid.
+//! the theme's sky and stays solid over a photo. An explicit opacity is the player's, down to 0%:
+//! it is drawn as chosen, and the ink is fitted against the worst possible backdrop as far as
+//! that plate allows, so a thin plate over a bright picture may not read. Without scenery the
+//! plates stay solid.
 use crate::{settings::HomePhoto, theme::Theme};
 use gpui::{rgb, Hsla};
 use std::cell::Cell;
@@ -103,6 +105,10 @@ pub(crate) struct Palette {
     pub alpha: f32,
     /// How opaque the dialogs' scrim is.
     pub scrim_alpha: f32,
+    /// How opaque the rules and outlines on the plates are. Under a chosen panel opacity they
+    /// fade along its square root: slower than the plates, so a thin panel keeps its outline
+    /// (at 50% the lines are at 71%), and gone with them at 0%. Else solid.
+    pub rule_alpha: f32,
 }
 
 /// The colours of a picture's stand-in ([`Palette::tile`]): its fill, and the letter on it.
@@ -328,20 +334,19 @@ impl Inputs {
         // Solid fills blend encoded sRGB (`over`); white and black bound all possible backdrop
         // pixels, including scenery. Use that bound rather than trusting the picture's wash.
         let backdrop = if lighter { 0xffffff } else { 0 };
-        let ink_end = if lighter { 1. } else { 0. };
         let custom = if let Plates::Custom(percent) = plates {
-            // An installed local theme can need more opacity than any built-in palette does.
-            (percent..=100).find_map(|percent| {
-                let alpha = f32::from(percent) / 100.;
-                let card = luminance(over(card_color, alpha, backdrop));
-                let chrome = luminance(over(chrome, alpha, backdrop));
-                let worst = if lighter {
-                    card.max(chrome)
-                } else {
-                    card.min(chrome)
-                };
-                reads_over(ink_end, worst, lighter, TEXT).then_some((alpha, worst))
-            })
+            // The player's opacity is drawn as chosen. Where no ink can read over the worst
+            // backdrop under a plate that thin, `fit` takes the inks to their end (white or
+            // black): the most any text can do there.
+            let alpha = f32::from(percent) / 100.;
+            let card = luminance(over(card_color, alpha, backdrop));
+            let chrome = luminance(over(chrome, alpha, backdrop));
+            let worst = if lighter {
+                card.max(chrome)
+            } else {
+                card.min(chrome)
+            };
+            Some((alpha, worst))
         } else {
             None
         };
@@ -419,7 +424,7 @@ impl Inputs {
             shade_alpha,
         };
 
-        // Keep the legacy automatic path unchanged. An unsatisfiable local override stays solid.
+        // Keep the legacy automatic path unchanged.
         let alpha = if let Some((alpha, _)) = custom {
             alpha
         } else if plates == Plates::Automatic {
@@ -484,6 +489,7 @@ impl Inputs {
             warning,
             alpha,
             scrim_alpha,
+            rule_alpha: custom.map_or(1., |(alpha, _)| alpha.sqrt()),
         }
     }
 }
@@ -546,6 +552,12 @@ impl Palette {
         Tile { fill, ink }
     }
 
+    /// A rule between rows on a plate, or a plate's outline: the divider, fading with the
+    /// plates when the player chose their opacity.
+    pub(crate) fn rule(&self) -> Hsla {
+        Hsla::from(rgb(self.divider)).opacity(self.rule_alpha)
+    }
+
     /// A card, caption or plate: the theme's tint at the plates' opacity.
     pub(crate) fn card(&self) -> Hsla {
         Hsla::from(rgb(self.card_color)).opacity(self.alpha)
@@ -577,6 +589,13 @@ impl Palette {
     /// A resting input's outline: faint. The focus ring, not this line, marks the one in use.
     pub(crate) fn input_edge(&self) -> Hsla {
         Hsla::from(rgb(self.text)).opacity(0.14)
+    }
+
+    /// The input edge drawn as a plate's outline: it fades with the plates, as [`rule`] does.
+    ///
+    /// [`rule`]: Palette::rule
+    pub(crate) fn plate_edge(&self) -> Hsla {
+        self.input_edge().opacity(self.rule_alpha)
     }
 
     /// What a dialog dims the launcher with.

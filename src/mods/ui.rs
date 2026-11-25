@@ -376,7 +376,7 @@ pub(super) fn browse_card(
         .overflow_hidden()
         .rounded(crate::tokens::r(crate::tokens::R_CARD))
         .border_1()
-        .border_color(palette().input_edge())
+        .border_color(palette().plate_edge())
         .bg(palette().card())
         .cursor_pointer()
         .hover(|s| s.border_color(c(palette().muted)))
@@ -484,7 +484,7 @@ pub(super) fn card() -> Div {
     div()
         .rounded(crate::tokens::r(crate::tokens::R_CARD))
         .border_1()
-        .border_color(c(palette().divider))
+        .border_color(palette().rule())
         .bg(palette().card())
 }
 

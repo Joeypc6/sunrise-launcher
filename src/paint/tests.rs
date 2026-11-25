@@ -506,6 +506,10 @@ fn plates_use_the_displayed_photo_only_and_stay_opaque_over_it() {
 #[test]
 fn panel_opacity_contrast_matrix() {
     use sunrise_launcher::backend::{PANEL_OPACITY_MAX, PANEL_OPACITY_MIN};
+    // From 82% up every built-in theme's plate text reads over any backdrop pixel. Below that
+    // the opacity is still drawn as chosen: plate text reads where the plate allows and is
+    // otherwise at its end (white, or black on a light theme), and the opaque fills still hold.
+    const READS_FROM: u8 = 82;
     let ids = std::iter::once(themes::TWILIGHT).chain(themes::THEMES.map(|t| t.id));
     let mut photo = HomePhoto {
         image: std::sync::Arc::new(gpui::RenderImage::new([image::Frame::new(
@@ -525,7 +529,7 @@ fn panel_opacity_contrast_matrix() {
         for accent in accents {
             for tint in [0., 6., 16.] {
                 let (mut settings, theme) = look(Some(id), accent, tint, true);
-                for percent in [PANEL_OPACITY_MIN, PANEL_OPACITY_MAX] {
+                for percent in [PANEL_OPACITY_MIN, 40, READS_FROM, PANEL_OPACITY_MAX] {
                     settings.set_panel_opacity(Some(percent));
                     for tone in std::iter::once(None).chain(photo_tones.map(Some)) {
                         photo.tone = tone;
@@ -544,6 +548,15 @@ fn panel_opacity_contrast_matrix() {
                                 "{name}: {role} {ink:06x} on {surface:06x}: {ratio:.3}"
                             );
                         };
+                        let end = if theme.night.dark { 0xffffff } else { 0 };
+                        // On a plate, below READS_FROM: readable, or the most any ink can do.
+                        let on_plate = |surface: u32, ink: u32, min: f32, role: &str| {
+                            if percent >= READS_FROM || contrast(ink, surface) >= min {
+                                check(surface, ink, min, role);
+                            } else {
+                                assert_eq!(ink, end, "{name}: {role} on {surface:06x}");
+                            }
+                        };
                         for behind in [0, 0xffffff, 0x808080].into_iter().chain(theme.night.sky) {
                             for plate in [p.card_color, p.chrome] {
                                 let surface = over(plate, p.alpha, behind);
@@ -552,16 +565,16 @@ fn panel_opacity_contrast_matrix() {
                                     (p.muted, "muted"),
                                     (p.accent_ink, "accent"),
                                 ] {
-                                    check(surface, ink, TEXT, role);
+                                    on_plate(surface, ink, TEXT, role);
                                 }
                                 for (ink, role) in [(p.focus, "focus"), (p.line, "control edge")] {
-                                    check(surface, ink, MARK, role);
+                                    on_plate(surface, ink, MARK, role);
                                 }
                             }
                             let chrome = over(p.chrome, p.alpha, behind);
-                            check(chrome, p.chrome_text, TEXT, "chrome body");
-                            check(chrome, p.chrome_muted, TEXT, "chrome muted");
-                            check(chrome, p.chrome_line, MARK, "chrome edge");
+                            on_plate(chrome, p.chrome_text, TEXT, "chrome body");
+                            on_plate(chrome, p.chrome_muted, TEXT, "chrome muted");
+                            on_plate(chrome, p.chrome_line, MARK, "chrome edge");
                         }
                         for surface in [p.raised, p.field, p.hover] {
                             for (ink, role) in [
@@ -725,4 +738,35 @@ fn begin_sets_the_frames_palette_from_the_inputs() {
     begin(&violet, &a, None, None);
     assert_eq!(palette(), pa);
     assert_eq!(pa.accent, glass::ACCENT);
+}
+
+/// Under a chosen opacity a plate's outlines and rules fade along its square root: slower than
+/// the plate, so a thin panel keeps its edge, and gone with it at 0%. Without a chosen opacity
+/// they are solid.
+#[test]
+fn panel_lines_fade_slower_than_the_plates_and_go_with_them_at_zero() {
+    let near = |a: f32, b: f32| assert!((a - b).abs() < 1e-3, "{a} != {b}");
+    let mut settings = Settings::default();
+    let theme = from_settings(&settings, WindowAppearance::Dark);
+    assert_eq!(Palette::of(&settings, &theme).rule_alpha, 1.);
+    for (percent, lines) in [
+        (100, 1.),
+        (82, 0.906),
+        (50, 0.707),
+        (25, 0.5),
+        (4, 0.2),
+        (0, 0.),
+    ] {
+        settings.set_panel_opacity(Some(percent));
+        let p = Palette::of(&settings, &theme);
+        near(p.rule_alpha, lines);
+        near(p.rule().a, lines);
+        near(p.plate_edge().a, p.input_edge().a * lines);
+        assert!(
+            p.rule_alpha >= p.alpha,
+            "{percent}%: lines never fainter than the plate"
+        );
+    }
+    settings.set_panel_opacity(None);
+    assert_eq!(Palette::of(&settings, &theme).rule_alpha, 1.);
 }

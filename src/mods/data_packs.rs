@@ -473,7 +473,7 @@ impl Launcher {
                         .px(px(16.))
                         .py(px(10.))
                         .border_t_1()
-                        .border_color(c(palette().divider))
+                        .border_color(palette().rule())
                         .child(
                             div()
                                 .flex_1()
@@ -578,7 +578,7 @@ impl Launcher {
                 .gap(px(12.))
                 .px(px(14.))
                 .py(px(10.))
-                .when(n > 0, |d| d.border_t_1().border_color(c(palette().divider)))
+                .when(n > 0, |d| d.border_t_1().border_color(palette().rule()))
                 .child(match has {
                     // Its place is kept so the names line up.
                     true => div().flex_none().size(px(18.)).into_any_element(),

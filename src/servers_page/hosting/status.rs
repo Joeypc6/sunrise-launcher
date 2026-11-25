@@ -271,7 +271,7 @@ impl Launcher {
                     .gap(px(10.))
                     .px(px(16.))
                     .border_t_1()
-                    .border_color(rgb(palette().divider))
+                    .border_color(palette().rule())
                     .child(div().text_color(rgb(palette().accent_ink)).child("›"))
                     .child(input),
             )

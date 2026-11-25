@@ -108,16 +108,14 @@ pub(crate) fn group(rows: Vec<Div>) -> Div {
         .flex_col()
         .rounded(crate::tokens::r(crate::tokens::R_CARD))
         .border_1()
-        .border_color(rgb(palette().divider))
+        .border_color(palette().rule())
         .bg(palette().card());
     for (i, row) in rows.into_iter().enumerate() {
         card = card.child(
             row.id(("settings-row", i))
                 .px(px(16.))
                 .py(px(14.))
-                .when(i > 0, |d| {
-                    d.border_t_1().border_color(rgb(palette().divider))
-                }),
+                .when(i > 0, |d| d.border_t_1().border_color(palette().rule())),
         );
     }
     card
