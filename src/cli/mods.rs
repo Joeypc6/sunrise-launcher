@@ -163,30 +163,30 @@ pub(super) fn approve_mod_change(
 
 /// Commands for browser-installed content and registry mods in a selected profile.
 pub(super) fn mods(action: ModsCmd, as_json: bool) -> Result<(), Error> {
-    let target = Target::of(&action)?;
+    let scope = Scope::of(&action)?;
     let on = matches!(action, ModsCmd::Enable { .. });
     match action {
-        ModsCmd::List { .. } => list(&target, as_json)?,
+        ModsCmd::List { .. } => list(&scope, as_json)?,
         ModsCmd::Search {
             text,
             kind,
             everything,
             source,
             ..
-        } => search(&target, text, kind, everything, source, as_json)?,
+        } => search(&scope, text, kind, everything, source, as_json)?,
         ModsCmd::Install {
             project,
             everything,
             source,
             world,
             ..
-        } => install(&target, project, everything, source, world, as_json)?,
+        } => install(&scope, project, everything, source, world, as_json)?,
         ModsCmd::Update {
             project,
             check,
             confirm_world_loss,
             ..
-        } => update(&target, project, check, confirm_world_loss, as_json)?,
+        } => update(&scope, project, check, confirm_world_loss, as_json)?,
         ModsCmd::AddGithub {
             url,
             mod_id,
@@ -195,7 +195,7 @@ pub(super) fn mods(action: ModsCmd, as_json: bool) -> Result<(), Error> {
             confirm_world_loss,
             ..
         } => add_github(
-            &target,
+            &scope,
             url,
             mod_id,
             all,
@@ -208,14 +208,14 @@ pub(super) fn mods(action: ModsCmd, as_json: bool) -> Result<(), Error> {
             trust_native_code,
             confirm_world_loss,
             ..
-        } => update_github(&target, id, check, trust_native_code, confirm_world_loss)?,
+        } => update_github(&scope, id, check, trust_native_code, confirm_world_loss)?,
         ModsCmd::Remove {
             project,
             confirm_world_loss,
             ..
-        } => remove(&target, project, confirm_world_loss, as_json)?,
+        } => remove(&scope, project, confirm_world_loss, as_json)?,
         ModsCmd::Enable { project, .. } | ModsCmd::Disable { project, .. } => {
-            switch_mod(&target, project, on)?
+            switch_mod(&scope, project, on)?
         }
     }
     Ok(())
@@ -223,13 +223,13 @@ pub(super) fn mods(action: ModsCmd, as_json: bool) -> Result<(), Error> {
 
 /// What a `mods` command works on: the profile, the folder it changes (the game's own for
 /// `search`) and the Minecraft version that profile plays.
-struct Target {
+struct Scope {
     instance: instances::Instance,
     home: PathBuf,
     game: String,
 }
 
-impl Target {
+impl Scope {
     fn of(action: &ModsCmd) -> Result<Self, Error> {
         // What the browser installs goes into an instance's game folder.
         let instance = match &action {
@@ -252,7 +252,7 @@ impl Target {
         };
         // The Minecraft version the instance's own build plays (its pinned build), else the launcher's.
         let game = backend::played_version_id_by(instance.version.as_deref());
-        Ok(Target {
+        Ok(Scope {
             instance,
             home,
             game,
@@ -282,8 +282,8 @@ fn mutation_hooks() -> sunrise::InstallHooks<'static> {
     }
 }
 
-fn list(target: &Target, as_json: bool) -> Result<(), Error> {
-    let Target { home, .. } = target;
+fn list(scope: &Scope, as_json: bool) -> Result<(), Error> {
+    let Scope { home, .. } = scope;
     let list = installed::Installed::load(home).entries;
     if as_json {
         json(list.iter().map(entry_json).collect());
@@ -318,14 +318,14 @@ fn list(target: &Target, as_json: bool) -> Result<(), Error> {
 }
 
 fn search(
-    target: &Target,
+    scope: &Scope,
     text: Vec<String>,
     kind: KindArg,
     everything: bool,
     source: SourceArg,
     as_json: bool,
 ) -> Result<(), Error> {
-    let Target { game, .. } = target;
+    let Scope { game, .. } = scope;
     let kind = match kind {
         KindArg::Resource => Kind::ResourcePack,
         KindArg::Modpack => Kind::Modpack,
@@ -378,19 +378,19 @@ fn search(
 }
 
 fn install(
-    target: &Target,
+    scope: &Scope,
     project: String,
     everything: bool,
     source: SourceArg,
     world: Option<String>,
     as_json: bool,
 ) -> Result<(), Error> {
-    let Target {
+    let Scope {
         instance,
         home,
         game,
         ..
-    } = target;
+    } = scope;
     if let SourceArg::Sunrise = source {
         return install_registry(instance, project, world, everything, as_json);
     }
@@ -416,18 +416,18 @@ fn install(
 }
 
 fn update(
-    target: &Target,
+    scope: &Scope,
     project: Option<String>,
     check: bool,
     confirm_world_loss: bool,
     as_json: bool,
 ) -> Result<(), Error> {
-    let Target {
+    let Scope {
         instance,
         home,
         game,
         ..
-    } = target;
+    } = scope;
     let identity = sunrise_launcher::profile_txn::Identity::of(home).map_err(Error::from);
     let list = installed::Installed::load(home).entries;
     let chosen: Vec<_> = list
@@ -475,14 +475,14 @@ fn update(
 }
 
 fn add_github(
-    target: &Target,
+    scope: &Scope,
     url: String,
     mod_id: Option<String>,
     all: bool,
     trust_native_code: bool,
     confirm_world_loss: bool,
 ) -> Result<(), Error> {
-    let Target { instance, .. } = target;
+    let Scope { instance, .. } = scope;
     let link = github_mods::parse(&url)?;
     let found = github_mods::resolve(&link, &github_mods::api)?;
     if trust_native_code {
@@ -501,13 +501,13 @@ fn add_github(
 }
 
 fn update_github(
-    target: &Target,
+    scope: &Scope,
     id: Option<String>,
     check: bool,
     trust_native_code: bool,
     confirm_world_loss: bool,
 ) -> Result<(), Error> {
-    let Target { instance, home, .. } = target;
+    let Scope { instance, home, .. } = scope;
     let mut origins = github_mods::origins(home);
     origins.retain(|o| id.as_deref().is_none_or(|i| o.id == i));
     if trust_native_code {
@@ -551,12 +551,12 @@ fn update_github(
 }
 
 fn remove(
-    target: &Target,
+    scope: &Scope,
     project: String,
     confirm_world_loss: bool,
     as_json: bool,
 ) -> Result<(), Error> {
-    let Target { instance, home, .. } = target;
+    let Scope { instance, home, .. } = scope;
     let identity = sunrise_launcher::profile_txn::Identity::of(home);
     let list = installed::Installed::read(home)?;
     let installed = list.lookup(&project);
@@ -592,8 +592,8 @@ fn remove(
     Ok(())
 }
 
-fn switch_mod(target: &Target, project: String, on: bool) -> Result<(), Error> {
-    let Target { home, .. } = target;
+fn switch_mod(scope: &Scope, project: String, on: bool) -> Result<(), Error> {
+    let Scope { home, .. } = scope;
     let profile = if on {
         let identity = sunrise_launcher::profile_txn::Identity::of(home)?;
         Some(
