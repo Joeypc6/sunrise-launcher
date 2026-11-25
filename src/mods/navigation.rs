@@ -21,6 +21,31 @@ impl Launcher {
         self.mods_load_v2_page(id, from);
     }
 
+    /// Opens a dependency's page from the open mod's: Back returns to that mod's page.
+    pub(super) fn mods_show_dependency(&mut self, id: String) {
+        let parent = self.mods_state.open.as_ref().and_then(Open::as_parent);
+        self.mods_show_v2_project(id);
+        if let Some(open) = self.mods_state.open.as_mut() {
+            open.parent = parent;
+        }
+    }
+
+    /// Back to a mod's page a dependency was opened from, with its own way back.
+    pub(super) fn mods_return_to_project(
+        &mut self,
+        id: String,
+        from: Page,
+        parent: Option<Parent>,
+    ) {
+        self.mods_state.nightly.open = None;
+        self.mods_state.nightly.collection = None;
+        self.ui.page = Page::Project;
+        self.mods_load_v2_page(id, from);
+        if let Some(open) = self.mods_state.open.as_mut() {
+            open.parent = parent;
+        }
+    }
+
     /// Opens a mod's page, from Home or anywhere else. Its details are read in a worker.
     pub(crate) fn mods_show_project(&mut self, id: String) {
         self.mods_show_v2_project(id);
@@ -266,3 +291,6 @@ impl Launcher {
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

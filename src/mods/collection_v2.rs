@@ -270,7 +270,7 @@ impl Launcher {
                     cx.stop_propagation();
                     this.mods_show_v2_project(project.clone());
                     if let Some(open) = this.mods_state.open.as_mut() {
-                        open.parent = Some(parent.clone());
+                        open.parent = Some(Parent::Collection(parent.clone()));
                     }
                     cx.notify();
                 }))
