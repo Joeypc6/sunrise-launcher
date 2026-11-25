@@ -146,10 +146,33 @@ impl Launcher {
         // A build switch prepares its build itself, and its own row says each step.
         let switching = jobs.iter().any(|job| job.key == "switch");
         if self.preparing && !switching {
-            jobs.push(prepare_job());
+            jobs.push(prepare_job(
+                tr("Preparing the game"),
+                ["prepare", "prepare-java"],
+            ));
         } else if self.starting_client.is_some() || self.play_admission.is_some() {
-            let step = self.play_step.map_or(Main::Starting, Main::Step);
-            jobs.push(Job::new("start", tr("Starting the game")).step(step.label().to_string()));
+            jobs.push(self.start_job());
+        }
+    }
+
+    /// Play on its way to the game. Its download says how far it is, and its preparation the
+    /// same steps and counts as Prepare's (sunrise-org/sunrise-launcher#417): never a bare
+    /// "Getting ready…" that doesn't move.
+    fn start_job(&self) -> Job {
+        use sunrise_launcher::backend::PlayStep;
+        let what = tr("Starting the game");
+        match self.play_step {
+            Some(PlayStep::Prepare) => prepare_job(what, ["start-prepare", "start-java"]),
+            Some(PlayStep::Download) => {
+                let job = Job::new("start-download", what)
+                    .step(Main::Step(PlayStep::Download).label().to_string());
+                match self.play_download {
+                    Some(fraction) => job.measured(fraction),
+                    None => job,
+                }
+            }
+            step => Job::new("start", what)
+                .step(step.map_or(Main::Starting, Main::Step).label().to_string()),
         }
     }
 
@@ -322,7 +345,7 @@ impl Launcher {
 /// Getting the game's files ready: the step the preparer is at, with Minecraft's file count
 /// while it downloads them. Its last step has no count; its time left is how long it took
 /// before on this machine.
-fn prepare_job() -> Job {
+fn prepare_job(what: &str, keys: [&'static str; 2]) -> Job {
     use sunrise_launcher::backend::{prepare_step_state, PrepareStep};
     let (step, started) = prepare_step_state();
     let files = match step {
@@ -330,7 +353,7 @@ fn prepare_job() -> Job {
         _ => None,
     };
     let stage = InstallProgress::Minecraft(step, files);
-    let job = Job::new("prepare", tr("Preparing the game")).step(stage_label(stage));
+    let job = Job::new(keys[0], what).step(stage_label(stage));
     match (step, stage_fraction(stage), started) {
         (PrepareStep::Prepare, _, Some(started)) => Job {
             eta: crate::eta::expected_prepare_duration().and_then(|expected| {
@@ -340,7 +363,7 @@ fn prepare_job() -> Job {
         },
         // Each step's count starts again at 0: a key of its own, so its time left does too.
         (PrepareStep::Java, Some(fraction), _) => Job {
-            key: "prepare-java",
+            key: keys[1],
             ..job.measured(fraction)
         },
         (_, Some(fraction), _) => job.measured(fraction),

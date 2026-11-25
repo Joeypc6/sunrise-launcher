@@ -112,6 +112,7 @@ impl Launcher {
                 | Msg::ConfirmUnreviewed(_, _) => self.on_install_message(msg),
                 Msg::Playing(_)
                 | Msg::PlayStep(_)
+                | Msg::PlayDownload(_)
                 | Msg::ManagedBuild { .. }
                 | Msg::ManagedBuildLog(_)
                 | Msg::ManagedClient { .. }

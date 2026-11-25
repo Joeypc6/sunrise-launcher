@@ -80,3 +80,28 @@ fn the_list_folds_again_once_one_job_is_left() {
         },
     );
 }
+
+#[test]
+fn play_says_how_far_its_download_is_and_what_its_preparation_does() {
+    in_scratch_launcher(
+        "status_strip::tests::play_says_how_far_its_download_is_and_what_its_preparation_does",
+        |launcher| {
+            use sunrise_launcher::backend::PlayStep;
+            launcher.starting_client = Some(TAG.into());
+            launcher.play_step = Some(PlayStep::Download);
+            launcher.play_download = Some(0.4);
+            let jobs = launcher.jobs();
+            assert_eq!(jobs.len(), 1);
+            assert_eq!(jobs[0].what, "Starting the game");
+            assert_eq!(jobs[0].step.as_deref(), Some("Downloading the game…"));
+            assert_eq!(jobs[0].fraction, Some(0.4));
+            // Its preparation names the preparer's own step (sunrise-org/sunrise-launcher#417).
+            launcher.play_step = Some(PlayStep::Prepare);
+            launcher.play_download = None;
+            let jobs = launcher.jobs();
+            let step = jobs[0].step.as_deref().unwrap_or_default();
+            assert_ne!(step, "Getting ready…");
+            assert!(!step.is_empty());
+        },
+    );
+}

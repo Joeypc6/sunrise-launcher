@@ -327,6 +327,8 @@ struct Launcher {
     starting_client: Option<String>,
     /// Which step the accepted Play is at, for the label while the game is starting.
     play_step: Option<backend::PlayStep>,
+    /// How far the accepted Play's game build download is, while it is at that step.
+    play_download: Option<f32>,
     /// The accepted Play the session worker is answering.
     starting_play: Option<launcher_play::PlayIntent>,
     /// Play was pressed on a version not prepared yet: it starts once this preparation ends well.

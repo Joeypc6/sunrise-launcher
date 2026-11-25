@@ -636,9 +636,13 @@ impl Launcher {
             .filter(|t| native_mods::is_native(t))
             .and_then(crate::profile_builds::native_base);
         let build = version.as_ref().map_or_else(
-            // Dev never falls back to another channel, so say it has nothing to play yet.
-            || match instance.channel {
-                instances::Channel::Dev => tr("Dev · no build yet").into(),
+            // Dev never falls back to another channel, so say why it has nothing to play: the
+            // build list is still on its way or didn't load, else the channel has no build yet
+            // (sunrise-org/sunrise-launcher#417).
+            || match (instance.channel, &self.releases) {
+                (instances::Channel::Dev, Load::Loading) => tr("Dev · finding builds…").into(),
+                (instances::Channel::Dev, Load::Failed(_)) => tr("Dev · builds didn't load").into(),
+                (instances::Channel::Dev, Load::Ready(_)) => tr("Dev · no build yet").into(),
                 _ => tr("Sunrise").into(),
             },
             |tag| {

@@ -455,6 +455,7 @@ impl Launcher {
         self.play_pressed = Some(Instant::now());
         self.starting_client = Some(target.clone().unwrap_or_default());
         self.play_step = Some(backend::PlayStep::Assets);
+        self.play_download = None;
         let cancellation = native_mods::Cancellation::default();
         self.native_cancellation = Some(cancellation.clone());
         let tx = self.tx.clone();
@@ -493,7 +494,7 @@ impl Launcher {
                 &cancellation,
                 |progress| {
                     let msg = match progress {
-                        Progress::Download(_) => Msg::PlayStep(backend::PlayStep::Download),
+                        Progress::Download(fraction) => Msg::PlayDownload(fraction),
                         Progress::Prepare => Msg::PlayStep(backend::PlayStep::Prepare),
                         Progress::NativeBuild { base, mods } => Msg::ManagedBuild {
                             instance: instance.id.clone(),
@@ -546,6 +547,7 @@ impl Launcher {
         // session arrives.
         self.starting_client = Some(tag.clone());
         self.play_step = None;
+        self.play_download = None;
         let accepted = intent.account.clone();
         self.play_pressed = Some(Instant::now());
         let tx = self.tx.clone();
