@@ -605,7 +605,7 @@ impl Launcher {
                 .cursor_pointer()
                 .hover(|s| s.text_color(c(p.accent_ink)))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.mods_show_v2_project(project.clone());
+                    this.mods_show_dependency(project.clone());
                     cx.notify();
                 }));
         }

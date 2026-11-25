@@ -32,14 +32,44 @@ pub(super) struct Open {
     /// The screen Back returns to.
     pub(super) from: Page,
     pub(super) v2_page: Option<Result<Box<model::discover_v2::V2Page>, String>>,
-    /// The collection's page this mod's was opened from: Back returns to it.
-    pub(super) parent: Option<String>,
+    /// The page this one was opened from, when it is not `from` itself: Back returns to it.
+    pub(super) parent: Option<Parent>,
     /// The installed mods this page's Remove asked to remove, recorded while their rows are
     /// still read: the page leaves once that Remove finishes.
     pub(super) removing: Vec<String>,
 }
 
+/// A page a mod's page was opened from, which Back returns to before `Open::from`.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Parent {
+    /// A registry collection's page (by id), opened from one of its mods.
+    Collection(String),
+    /// Another mod's page, opened from its Dependencies. It keeps its own way back.
+    Project {
+        id: String,
+        name: String,
+        parent: Option<Box<Parent>>,
+    },
+}
+
 impl Open {
+    /// This page as the way back from a dependency opened on it: a registry mod's page, or
+    /// nothing for a collection's or an installed archive's, which list no dependencies.
+    pub(super) fn as_parent(&self) -> Option<Parent> {
+        if !self.v2 || self.collection {
+            return None;
+        }
+        let name = match &self.v2_page {
+            Some(Ok(page)) => page.name.clone(),
+            _ => self.id.clone(),
+        };
+        Some(Parent::Project {
+            id: self.id.clone(),
+            name,
+            parent: self.parent.clone().map(Box::new),
+        })
+    }
+
     pub(super) fn finish_v2(
         &mut self,
         request: u64,
