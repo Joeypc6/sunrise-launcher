@@ -253,6 +253,15 @@ impl Fixture {
     }
 
     fn apply_on(&self, base: &str, action: Action<'_>) -> Result<InstalledBatch, InstallError> {
+        self.apply_reporting(base, action, &|_| {})
+    }
+
+    fn apply_reporting(
+        &self,
+        base: &str,
+        action: Action<'_>,
+        progress: &dyn Fn(InstallProgress),
+    ) -> Result<InstalledBatch, InstallError> {
         let target = self.target();
         let request = V2EditRequest {
             target: &target,
@@ -266,7 +275,7 @@ impl Fixture {
         };
         let hooks = V2Hooks {
             install: InstallHooks {
-                progress: &|_| {},
+                progress,
                 continue_after_failure: &|_| false,
                 cancellation: None,
             },
@@ -418,6 +427,42 @@ pub(super) fn world(home: &Path, folder: &str, sunrise: Tag) {
         .unwrap(),
     )
     .unwrap();
+}
+
+#[test]
+fn an_install_says_its_next_step_once_its_downloads_are_in() {
+    Fixture::run(
+        concat!(
+            module_path!(),
+            "::an_install_says_its_next_step_once_its_downloads_are_in"
+        ),
+        |mut fixture| {
+            fixture.project("lantern", "Lanterns", V2Kind::Mod);
+            fixture.release("lantern", "1.0.0", "", &[(AMBER, EARLIER_BLOCK)]);
+            fixture.project("candle", "Candles", V2Kind::Mod);
+            fixture.release("candle", "1.0.0", "", &[(AMBER, EARLIER_BLOCK)]);
+            let seen = std::cell::RefCell::new(Vec::new());
+            fixture
+                .apply_reporting(
+                    BUILD,
+                    Action::Install(projects(&["lantern", "candle"])),
+                    &|step| seen.borrow_mut().push(step),
+                )
+                .unwrap();
+            let seen = seen.into_inner();
+            // The checks after the last download (sunrise-org/sunrise-launcher#376) run under a
+            // step of their own, never under a download percentage that no longer moves.
+            let last = seen
+                .iter()
+                .rposition(|step| matches!(step, InstallProgress::Downloading(_)))
+                .expect("the install downloads its releases");
+            assert_eq!(
+                seen.get(last + 1),
+                Some(&InstallProgress::Checking),
+                "{seen:?}"
+            );
+        },
+    );
 }
 
 #[test]

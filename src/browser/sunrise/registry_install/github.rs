@@ -201,6 +201,8 @@ pub(super) fn edit_github(
     let edit = profile.begin_edit(choose, |f| {
         (hooks.progress)(InstallProgress::Downloading(f))
     })?;
+    // The game build is in: say the checks that follow, not its last percentage.
+    (hooks.progress)(InstallProgress::Checking);
     if matches!(check, Check::Base(base) if edit.base() != base) {
         return Err(InstallError::Refused(
             super::source::changed_source_target().to_string(),

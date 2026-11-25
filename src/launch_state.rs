@@ -542,9 +542,16 @@ impl Launcher {
     pub(crate) fn on_play_message(&mut self, msg: Msg, cx: &mut Context<Self>) {
         match msg {
             Msg::Playing(playing) => self.playing = playing,
+            Msg::PlayDownload(fraction) => {
+                if self.starting_client.is_some() {
+                    self.play_step = Some(backend::PlayStep::Download);
+                    self.play_download = Some(fraction);
+                }
+            }
             Msg::PlayStep(step) => {
                 if self.starting_client.is_some() {
                     self.play_step = Some(step);
+                    self.play_download = None;
                 }
                 if step == backend::PlayStep::SignIn && self.native_step.take().is_some() {
                     self.native_progress = None;
@@ -628,6 +635,7 @@ impl Launcher {
                 }
                 self.starting_client = None;
                 self.play_step = None;
+                self.play_download = None;
                 self.accounts = Accounts::load();
                 self.load_auth_statuses(false);
                 match *result {

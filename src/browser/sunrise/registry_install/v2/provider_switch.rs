@@ -85,6 +85,8 @@ pub(crate) fn switch_provider_v2_with(
     let edit = profile.begin_edit(choose, |f| {
         (hooks.install.install.progress)(InstallProgress::Downloading(f))
     })?;
+    // The game build is in: say the checks that follow, not its last percentage.
+    (hooks.install.install.progress)(InstallProgress::Checking);
     let base_build = edit.base().to_owned();
     let default_cancelled = native_mods::Cancellation::default();
     let cancelled = hooks
