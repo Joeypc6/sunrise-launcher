@@ -1,62 +1,100 @@
 use super::*;
 use crate::native_mods::tests::{dir, scratch_state, write_bundle};
+use std::process::Command;
 
-const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+/// The Sunrise commit the sets build: not the mods' own pin, whose SDK index other tests keep.
+const REVISION: &str = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const C: &str = "cccccccccccccccccccccccccccccccccccccccc";
 const BASE: &str = "native-aaaaaaa-base00000000";
+const ORIGIN: &str = "26.3-0.1.0";
 
-/// An instance with two native mods, built on a native build whose record names Sunrise `A`.
+/// Keeps a signed SDK index for Sunrise [`REVISION`], as a planned build leaves it; `date` makes another
+/// index for the same build.
+fn keep_index(date: &str) {
+    let mut index = sdk_cache::tests::index_of(&[], rust_toolchain::VERSION);
+    index.build.commit = REVISION.into();
+    index.build.date = date.into();
+    let folder = sdk_cache::build_folder(REVISION);
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(
+        folder.join(sunrise_launcher_sdk::INDEX),
+        index.to_json().as_bytes(),
+    )
+    .unwrap();
+}
+
+/// A Windows game executable for this host's machine, so a base's platform reads as it does for a
+/// release; any file elsewhere.
+fn game_executable() -> Vec<u8> {
+    let mut image = vec![0; 70];
+    image[..2].copy_from_slice(b"MZ");
+    image[0x3c..0x40].copy_from_slice(&64_u32.to_le_bytes());
+    image[64..68].copy_from_slice(b"PE\0\0");
+    let machine = match std::env::consts::ARCH {
+        "aarch64" => rust_toolchain::WINDOWS_ARM64_MACHINE,
+        _ => rust_toolchain::WINDOWS_X64_MACHINE,
+    };
+    image[68..70].copy_from_slice(&machine.to_le_bytes());
+    image
+}
+
+/// An instance with two native mods, built on a native build whose record names Sunrise `REVISION`.
 struct Set {
+    root: PathBuf,
     folder: PathBuf,
     built_on: About,
+    platform: BuildPlatform,
 }
 
 impl Set {
     fn new(name: &str) -> Self {
-        let folder = dir(name).join("instance").join("native");
+        let root = dir(name);
+        let folder = root.join("instance").join("native");
         write_bundle(&folder.join("alpha"), "alpha", "pub fn alpha() {}\n");
-        write_bundle(&folder.join("beta"), "beta", "pub fn beta() {}\n");
+        // Each test's set is its own build.
+        write_bundle(
+            &folder.join("beta"),
+            "beta",
+            &format!("pub fn beta() {{}}\n// {name}\n"),
+        );
+        keep_index("2026-11-13");
         Self {
+            root,
             folder,
             built_on: About {
-                base: "26.3-0.1.0".into(),
-                sunrise: A.into(),
+                base: ORIGIN.into(),
+                sunrise: REVISION.into(),
                 target: Target::Client,
                 left_out: Vec::new(),
             },
+            platform: BuildPlatform::default(),
         }
     }
 
-    fn lookup(
-        &self,
-        platform: BuildPlatform,
-        target: Target,
-        options: &BuildOptions<'_>,
-    ) -> Option<Hit> {
-        lookup(&Request {
-            base: BASE,
-            folder: &self.folder,
-            built_on: Some(&self.built_on),
-            platform,
-            profile: Profile::Optimized,
-            target,
-            options,
-        })
+    /// The same set, built for `platform`.
+    fn on(mut self, platform: BuildPlatform) -> Self {
+        self.platform = platform;
+        self
     }
 
-    fn found(&self) -> Option<String> {
-        self.lookup(
-            BuildPlatform::default(),
-            Target::Client,
-            &BuildOptions::default(),
-        )
-        .map(|hit| hit.version)
+    /// The instance's overrides file.
+    fn overrides(&self) -> PathBuf {
+        let mods = self
+            .root
+            .join("instance")
+            .join(sunrise_launcher_smod::mod_list::DIR);
+        fs::create_dir_all(&mods).unwrap();
+        mods.join(dependencies::OVERRIDES)
     }
 
-    /// The key `pipeline` keeps for this set once its planned build is installed: from the
-    /// staged copies of the mods, as it reads them before `materialize`.
-    fn planned_key(&self) -> String {
-        let copies = dir("reuse-copies");
-        let requested: Vec<Bundle> = scan_bundles(&self.folder)
+    /// Fresh private copies of the mods, as `pipeline` makes them.
+    fn copies(&self) -> Vec<Bundle> {
+        let copies = dir(&format!(
+            "{}-copies",
+            self.root.file_name().unwrap().to_string_lossy()
+        ));
+        scan_bundles(&self.folder)
             .unwrap()
             .into_iter()
             .map(|bundle| {
@@ -64,64 +102,174 @@ impl Set {
                 copy_bundle(&bundle, &to).unwrap();
                 Bundle { dir: to, ..bundle }
             })
-            .collect();
-        let files = files(&requested).unwrap();
-        let (left_out, mods, _) = kept_mods(&requested, &[], side_of(Target::Client));
-        Inputs {
-            revision: &self.built_on.sunrise,
+            .collect()
+    }
+
+    fn request<'a>(&'a self, options: &'a BuildOptions<'a>) -> Request<'a> {
+        Request {
             base: BASE,
-            origin: &self.built_on.base,
+            folder: &self.folder,
+            built_on: Some(&self.built_on),
+            platform: self.platform,
             profile: Profile::Optimized,
             target: Target::Client,
-            platform: BuildPlatform::default(),
-            exact: false,
-            left_out: &left_out,
-            mods: &mods,
-            files: &files,
+            options,
         }
-        .key()
+    }
+
+    fn found_with(&self, options: &BuildOptions<'_>) -> Option<String> {
+        lookup(&self.request(options), &self.copies()).map(|hit| hit.version)
+    }
+
+    fn found(&self) -> Option<String> {
+        self.found_with(&BuildOptions::default())
+    }
+
+    /// Plans the set as `pipeline` does, without the SDK check, installs what it would build,
+    /// and keeps the evidence `pipeline` keeps for it. Returns the build's version.
+    fn install(&self, options: &BuildOptions<'_>) -> String {
+        let found = scan_bundles(&self.folder).unwrap();
+        let digests: HashMap<String, Option<String>> = found
+            .iter()
+            .map(|b| (b.manifest.id.clone(), source_digest(b)))
+            .collect();
+        let requested = self.copies();
+        let side = side_of(Target::Client);
+        let (left_out, mods, declared) = kept_mods(&requested, options.skip, side);
+        let instance = instance_of(&self.folder, options);
+        let overrides =
+            dependencies::Overrides::read(&instance.join(sunrise_launcher_smod::mod_list::DIR))
+                .unwrap();
+        let (dispatch, links) =
+            resolve_build_dependencies(instance, &mods, &declared, side, &overrides).unwrap();
+        let ordered: Vec<Bundle> = links.order.iter().map(|&i| mods[i].clone()).collect();
+        let keys = sunrise_launcher_release_verify::sdk_keys_for(backend::GAME_REPO);
+        let sdk_base = sdk_cache::Base::from_env();
+        let sdk = sdk_cache::index(&sdk_base, REVISION, &keys).unwrap();
+        let (pins, mut read) = mixins::read_pins(&mods, Some(&sdk), None, |pin| {
+            Ok(sdk_cache::index(&sdk_base, pin, &keys)?)
+        })
+        .unwrap();
+        read.sdk.insert(REVISION.into(), sdk.signed().to_owned());
+        for (bundle, pin) in mods.iter().zip(&pins) {
+            mixins::materialize(bundle, &bundle.dir, pin).unwrap();
+        }
+        let mixins = mixins::for_key(&pins, |_| panic!("one pin")).unwrap();
+        let version = version_for(
+            REVISION,
+            &mixins,
+            Profile::Optimized,
+            Target::Client,
+            platform_key(false, self.platform, ORIGIN).as_deref(),
+            &requested,
+            &left_out,
+        )
+        .unwrap();
+        // A build already installed is used again, as `pipeline` does: only its evidence changes.
+        let installed = backend::version_dir(&version);
+        if !installed.join(".installed").is_file() {
+            self.publish(&installed, &mixins, &left_out, &mods, &ordered, &digests);
+        }
+        super::record(&Planned {
+            version: &version,
+            image: Image::new(&mods, &pins, &ordered, &dispatch, &left_out, &read),
+            admission: Admission::new(BASE, ORIGIN, options.exact_home.is_some()),
+            contents: Contents {
+                revision: REVISION,
+                origin: ORIGIN,
+                mixins: &mixins,
+                profile: Profile::Optimized,
+                kept: &mods,
+                digests: &digests,
+                left_out: &left_out,
+            },
+        });
+        version
+    }
+
+    /// Installs what `pipeline` would for the set, as `installation::install` lays it out.
+    fn publish(
+        &self,
+        installed: &Path,
+        mixins: &str,
+        left_out: &[LeftOut],
+        mods: &[Bundle],
+        ordered: &[Bundle],
+        digests: &HashMap<String, Option<String>>,
+    ) {
+        let _ = fs::remove_dir_all(installed);
+        fs::create_dir_all(installed).unwrap();
+        fs::write(installed.join(backend::CLIENT), game_executable()).unwrap();
+        let record = serde_json::json!({
+            "base": ORIGIN,
+            "sunrise": REVISION,
+            "horizon_mixins": mixins,
+            "rust": rust_toolchain::VERSION,
+            "profile": Profile::Optimized.name(),
+            "route": "prebuilt-api",
+            "left_out": left_out.iter().map(LeftOut::to_json).collect::<Vec<_>>(),
+            "target": "client",
+            "mods": mods.iter().map(|m| serde_json::json!({
+                "id": m.manifest.id,
+                "version": m.manifest.version,
+                "sha256": digests[&m.manifest.id],
+            })).collect::<Vec<_>>(),
+        });
+        fs::write(installed.join(RECORD), record.to_string()).unwrap();
+        for bundle in ordered {
+            copy_bundle(
+                bundle,
+                &installed
+                    .join(sunrise_launcher_smod::mod_list::NATIVE_DIR)
+                    .join(&bundle.manifest.id),
+            )
+            .unwrap();
+        }
+        fs::write(installed.join(".installed"), "").unwrap();
+    }
+
+    fn evidence(&self, version: &str) -> PathBuf {
+        backend::version_dir(version).join(EVIDENCE)
+    }
+
+    /// Rewrites `version`'s evidence through `edit`, as JSON.
+    fn edit_evidence(&self, version: &str, edit: impl FnOnce(&mut serde_json::Value)) {
+        let path = self.evidence(version);
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        edit(&mut json);
+        fs::write(path, json.to_string()).unwrap();
     }
 }
 
-/// An installed client build `version` with a record of what it was built from.
-fn install_fake(version: &str) -> PathBuf {
-    let dir = backend::version_dir(version);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(
-        dir.join(RECORD),
-        format!(r#"{{"base":"26.3-0.1.0","sunrise":"{A}","target":"client","left_out":[]}}"#),
-    )
-    .unwrap();
-    fs::write(dir.join(".installed"), "").unwrap();
-    dir
+impl Drop for Set {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(sdk_cache::build_folder(REVISION));
+    }
 }
 
-/// A set planned and installed once is found again from its inputs alone, and used without the
-/// SDK index, the check or any other step but saying it is up to date.
+/// A set planned and installed once is found again from a copy of its mods, and used without
+/// the SDK's check or any other step but saying it is up to date.
 #[test]
-fn the_same_inputs_find_the_installed_build_without_planning_it() {
+fn an_installed_set_is_found_from_a_copy_of_its_mods_without_checking_them() {
     let _guard = scratch_state();
     let set = Set::new("reuse-hit");
-    let version = format!("native-{}-000000000001", &A[..7]);
-    let installed_dir = install_fake(&version);
-    assert!(set.found().is_none(), "no record, no fast path");
-    record(Target::Client, &version, &set.planned_key());
-    let hit = set
-        .lookup(
-            BuildPlatform::default(),
-            Target::Client,
-            &BuildOptions::default(),
-        )
-        .expect("the same inputs find the build");
+    let version = set.install(&BuildOptions::default());
+    assert!(
+        set.evidence(&version).is_file(),
+        "the plan keeps its evidence"
+    );
+    let checks = SDK_CHECKS.with(std::cell::Cell::get);
+    let options = BuildOptions::default();
+    let hit = lookup(&set.request(&options), &set.copies()).expect("the same set is found");
     assert_eq!(hit.version, version);
-    let index_kept = sdk_cache::build_folder(A).exists();
     let steps = std::cell::RefCell::new(Vec::new());
     let built = reused(
         hit,
         Profile::Optimized,
         Target::Client,
-        &BuildOptions::default(),
+        &options,
         &|step| steps.borrow_mut().push(step),
         std::time::Instant::now(),
     )
@@ -133,122 +281,415 @@ fn the_same_inputs_find_the_installed_build_without_planning_it() {
     assert!(built.left_out.is_empty());
     assert_eq!(
         steps.into_inner(),
-        [Step::Plan(Plan::UpToDate, Profile::Optimized)],
-        "nothing is checked or fetched"
+        [Step::Plan(Plan::UpToDate, Profile::Optimized)]
     );
     assert_eq!(
-        sdk_cache::build_folder(A).exists(),
-        index_kept,
-        "no SDK index was fetched"
+        SDK_CHECKS.with(std::cell::Cell::get),
+        checks,
+        "the SDK tool checked nothing"
     );
-    assert!(installed_dir.join(".installed").is_file());
-    fs::remove_dir_all(installed_dir).unwrap();
+    let _ = fs::remove_dir_all(backend::version_dir(&version));
 }
 
-/// Any input that changes misses the fast path, and the same input again finds it again.
+/// Each input that changes the build without being in its version misses, and the same input
+/// again finds the build again: a mod's file, a horizon-mixins pin, the SDK index read for the
+/// build, the dispatch order the overrides allow, the platform and the target.
 #[test]
-fn a_changed_mod_pin_base_key_index_or_set_misses_the_installed_build() {
+fn an_input_that_changes_the_build_misses_it() {
     let _guard = scratch_state();
-    let set = Set::new("reuse-miss");
-    let version = format!("native-{}-000000000002", &A[..7]);
-    let installed_dir = install_fake(&version);
-    record(Target::Client, &version, &set.planned_key());
+    let set = Set::new("reuse-image");
+    let version = set.install(&BuildOptions::default());
     assert_eq!(set.found().as_deref(), Some(version.as_str()));
 
     let source = set.folder.join("alpha").join("src/lib.rs");
     fs::write(&source, "pub fn alpha() { changed() }\n").unwrap();
-    assert!(set.found().is_none(), "a changed mod file is another build");
+    assert!(set.found().is_none(), "a changed mod file");
     fs::write(&source, "pub fn alpha() {}\n").unwrap();
     assert_eq!(set.found().as_deref(), Some(version.as_str()));
 
     let manifest = set.folder.join("beta").join(NATIVE_MANIFEST);
     let pinned = fs::read_to_string(&manifest).unwrap();
-    let repinned = pinned.replace(
-        &format!("mixins='{}'", "b".repeat(40)),
-        &format!("mixins='{}'", "c".repeat(40)),
-    );
+    let repinned = pinned.replace(&format!("mixins='{B}'"), &format!("mixins='{C}'"));
     assert_ne!(repinned, pinned, "the fixture pins horizon-mixins");
     fs::write(&manifest, repinned).unwrap();
-    assert!(
-        set.found().is_none(),
-        "another horizon-mixins pin is another build"
-    );
+    assert!(set.found().is_none(), "another horizon-mixins pin");
     fs::write(&manifest, &pinned).unwrap();
     assert_eq!(set.found().as_deref(), Some(version.as_str()));
 
-    let windows = BuildPlatform {
+    keep_index("2026-11-14");
+    assert!(
+        set.found().is_none(),
+        "another SDK index for the build, with the same pins"
+    );
+    fs::remove_dir_all(sdk_cache::build_folder(REVISION)).unwrap();
+    assert!(
+        set.found().is_none(),
+        "no SDK index kept: nothing is fetched"
+    );
+    keep_index("2026-11-13");
+    assert_eq!(set.found().as_deref(), Some(version.as_str()));
+
+    let windows = Set::new("reuse-image-windows").on(BuildPlatform {
         target: Some(rust_toolchain::WINDOWS_X64_TARGET),
         machine: None,
-    };
+    });
+    assert!(windows.found().is_none(), "another platform key");
     let options = BuildOptions::default();
-    assert!(
-        set.lookup(windows, Target::Client, &options).is_none(),
-        "another base key"
-    );
-    assert!(
-        set.lookup(BuildPlatform::default(), Target::Server, &options)
-            .is_none(),
-        "a server"
-    );
-    let other_base = Set {
-        folder: set.folder.clone(),
-        built_on: About {
-            base: "26.3-0.1.1".into(),
-            ..set.built_on.clone()
-        },
+    let server = Request {
+        target: Target::Server,
+        ..set.request(&options)
     };
-    assert!(
-        other_base.found().is_none(),
-        "another release to start from"
-    );
+    assert!(lookup(&server, &set.copies()).is_none(), "a server");
+    let _ = fs::remove_dir_all(backend::version_dir(&version));
+}
 
-    let bundle = scan_bundles(&set.folder).unwrap().remove(0);
-    let skip = [LeftOut::new(&bundle, isolate::Why::DidNotBuild)];
-    let skipping = BuildOptions {
+/// The dispatch order is not in the version, but the build was planned with it: an override
+/// that changes it misses the build, though every file is the same.
+#[test]
+fn another_dispatch_order_misses_the_build() {
+    let _guard = scratch_state();
+    let set = Set::new("reuse-dispatch");
+    let manifest = set.folder.join("beta").join(NATIVE_MANIFEST);
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        text.replace("[native]", "load_before=['alpha']\n[native]"),
+    )
+    .unwrap();
+    let version = set.install(&BuildOptions::default());
+    assert_eq!(set.found().as_deref(), Some(version.as_str()));
+    fs::write(set.overrides(), "[beta]\nalpha='drop'\n").unwrap();
+    assert!(
+        set.found().is_none(),
+        "the override changes the dispatch order"
+    );
+    fs::remove_file(set.overrides()).unwrap();
+    assert_eq!(set.found().as_deref(), Some(version.as_str()));
+    let _ = fs::remove_dir_all(backend::version_dir(&version));
+}
+
+/// What admitted the plan without changing the build is kept apart from what the build used:
+/// another launcher, another base or an exact profile build misses, and once that caller has
+/// planned the set too, both find it.
+#[test]
+fn a_rule_that_only_admits_the_plan_misses_until_it_admits_it() {
+    let _guard = scratch_state();
+    let set = Set::new("reuse-admission");
+    let version = set.install(&BuildOptions::default());
+    let launcher = |json: &mut serde_json::Value| json["admitted"][0]["launcher"] = "0.0.1".into();
+    set.edit_evidence(&version, launcher);
+    assert!(set.found().is_none(), "another launcher's checks");
+    assert_eq!(set.install(&BuildOptions::default()), version);
+    assert_eq!(set.found().as_deref(), Some(version.as_str()));
+
+    let instance = set.root.join("instance");
+    let exact = BuildOptions {
+        exact_home: Some(&instance),
+        ..BuildOptions::default()
+    };
+    assert!(set.found_with(&exact).is_none(), "an exact profile build");
+    assert_eq!(set.install(&exact), version, "the same build");
+    assert_eq!(set.found_with(&exact).as_deref(), Some(version.as_str()));
+    assert_eq!(set.found().as_deref(), Some(version.as_str()));
+
+    let options = BuildOptions::default();
+    let other = Request {
+        base: "native-aaaaaaa-other0000000",
+        ..set.request(&options)
+    };
+    assert!(lookup(&other, &set.copies()).is_none(), "another base");
+    let _ = fs::remove_dir_all(backend::version_dir(&version));
+}
+
+/// A build without a mod is another version than the whole set's, so it never stands in for
+/// it; and a reduced build under the whole set's version (as launchers before this installed
+/// one) is never recorded as the whole set.
+#[test]
+fn a_reduced_build_never_satisfies_the_whole_set() {
+    let _guard = scratch_state();
+    let set = Set::new("reuse-reduced");
+    let beta = scan_bundles(&set.folder).unwrap().remove(1);
+    let skip = [LeftOut::new(&beta, isolate::Why::DidNotBuild)];
+    let reduced = BuildOptions {
         skip: &skip,
         ..BuildOptions::default()
     };
+    let without = set.install(&reduced);
+    assert_eq!(set.found_with(&reduced).as_deref(), Some(without.as_str()));
     assert!(
-        set.lookup(BuildPlatform::default(), Target::Client, &skipping)
-            .is_none(),
-        "a build without one of the mods"
+        set.found().is_none(),
+        "the whole set isn't the reduced build"
     );
+    let whole = set.install(&BuildOptions::default());
+    assert_ne!(whole, without, "the two builds have their own versions");
+    assert_eq!(set.found().as_deref(), Some(whole.as_str()));
+    assert_eq!(set.found_with(&reduced).as_deref(), Some(without.as_str()));
 
-    let index = sdk_cache::build_folder(A).join(sunrise_launcher_sdk::INDEX);
-    fs::create_dir_all(index.parent().unwrap()).unwrap();
-    fs::write(&index, b"{}").unwrap();
-    assert!(set.found().is_none(), "another SDK index for the pin");
-    fs::remove_dir_all(sdk_cache::build_folder(A)).unwrap();
-    assert_eq!(set.found().as_deref(), Some(version.as_str()));
-
-    fs::remove_file(installed_dir.join(".installed")).unwrap();
-    assert!(set.found().is_none(), "a build that isn't installed");
-    fs::remove_dir_all(installed_dir).unwrap();
+    // An older launcher's reduced build, installed under the whole set's version.
+    let installed = backend::version_dir(&whole);
+    fs::remove_file(set.evidence(&whole)).unwrap();
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&fs::read(installed.join(RECORD)).unwrap()).unwrap();
+    record["left_out"] = serde_json::json!([skip[0].to_json()]);
+    record["mods"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|m| m["id"] != "beta");
+    fs::write(installed.join(RECORD), record.to_string()).unwrap();
+    fs::remove_dir_all(
+        installed
+            .join(sunrise_launcher_smod::mod_list::NATIVE_DIR)
+            .join("beta"),
+    )
+    .unwrap();
+    assert_eq!(set.install_planned_only(&whole), whole);
+    assert!(
+        !set.evidence(&whole).exists(),
+        "a build that doesn't hold the plan keeps no evidence"
+    );
+    assert!(set.found().is_none());
+    for version in [whole, without] {
+        let _ = fs::remove_dir_all(backend::version_dir(&version));
+    }
 }
 
-/// The record keeps the newest keys, each once.
-#[test]
-fn a_record_keeps_the_newest_keys_once() {
-    let _guard = scratch_state();
-    let version = format!("native-{}-000000000003", &A[..7]);
-    let installed_dir = install_fake(&version);
-    for n in 0..10 {
-        record(Target::Client, &version, &format!("key{n}"));
+impl Set {
+    /// What `pipeline` records for the whole set when its build is already installed as
+    /// `version`, without installing anything.
+    fn install_planned_only(&self, version: &str) -> String {
+        let found = scan_bundles(&self.folder).unwrap();
+        let digests: HashMap<String, Option<String>> = found
+            .iter()
+            .map(|b| (b.manifest.id.clone(), source_digest(b)))
+            .collect();
+        let read = mixins::Read {
+            sdk: [(
+                REVISION.to_owned(),
+                sdk_cache::kept(REVISION).unwrap().signed().to_owned(),
+            )]
+            .into(),
+            local: None,
+        };
+        let pins = [B.to_owned(), B.to_owned()];
+        super::record(&Planned {
+            version,
+            image: Image::new(
+                &found,
+                &pins,
+                &found,
+                &["alpha".into(), "beta".into()],
+                &[],
+                &read,
+            ),
+            admission: Admission::new(BASE, ORIGIN, false),
+            contents: Contents {
+                revision: REVISION,
+                origin: ORIGIN,
+                mixins: B,
+                profile: Profile::Optimized,
+                kept: &found,
+                digests: &digests,
+                left_out: &[],
+            },
+        });
+        version.to_owned()
     }
-    record(Target::Client, &version, "key5");
-    let text = fs::read_to_string(installed_dir.join(INPUTS)).unwrap();
-    let keys: Vec<&str> = text.lines().collect();
-    assert_eq!(
-        keys,
-        ["key2", "key3", "key4", "key6", "key7", "key8", "key9", "key5"]
-    );
-    assert_eq!(
-        installed(Target::Client, A, "key5").as_deref(),
-        Some(version.as_str())
-    );
+}
+
+/// No evidence, a torn file, another layout, or the record of the launcher before this one
+/// (`.native-inputs`) finds nothing: the build is planned, and the plan keeps evidence again.
+#[test]
+fn missing_torn_or_older_evidence_plans_the_build() {
+    let _guard = scratch_state();
+    let set = Set::new("reuse-evidence");
+    let version = set.install(&BuildOptions::default());
+    let path = set.evidence(&version);
+    let whole = fs::read(&path).unwrap();
+    fs::write(&path, &whole[..whole.len() / 2]).unwrap();
+    assert!(set.found().is_none(), "a torn file");
+    set.install(&BuildOptions::default());
+    set.edit_evidence(&version, |json| json["schema"] = 0.into());
+    assert!(set.found().is_none(), "another layout");
+    set.install(&BuildOptions::default());
+    set.edit_evidence(&version, |json| json["extra"] = true.into());
+    assert!(set.found().is_none(), "an unknown field");
+    fs::remove_file(&path).unwrap();
+    let older = backend::version_dir(&version).join(".native-inputs");
+    fs::write(&older, "0123\n").unwrap();
+    assert!(set.found().is_none(), "the record of the launcher before");
+    set.install(&BuildOptions::default());
+    assert_eq!(set.found().as_deref(), Some(version.as_str()));
+    let _ = fs::remove_dir_all(backend::version_dir(&version));
+}
+
+/// The installed build must still be the one sealed and planned: a changed game, a record that
+/// names other mods or another pin, a missing mod copy, or no completion marker misses.
+#[test]
+fn an_installed_build_that_changed_misses() {
+    let _guard = scratch_state();
+    let set = Set::new("reuse-seal");
+    let version = set.install(&BuildOptions::default());
+    let installed = backend::version_dir(&version);
+    let game = installed.join(backend::CLIENT);
+    fs::write(&game, b"another game").unwrap();
+    assert!(set.found().is_none(), "another executable");
+    fs::write(&game, game_executable()).unwrap();
+    assert_eq!(set.found().as_deref(), Some(version.as_str()));
+
+    let library = installed.join(format!(
+        "{}extra{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    ));
+    fs::write(&library, b"library").unwrap();
+    assert!(set.found().is_none(), "a library beside the game");
+    fs::remove_file(&library).unwrap();
+
+    let record = installed.join(RECORD);
+    let planned = fs::read_to_string(&record).unwrap();
+    fs::write(&record, planned.replace(B, C)).unwrap();
     assert!(
-        installed(Target::Client, A, "key1").is_none(),
-        "an old key is gone"
+        set.found().is_none(),
+        "a record with another horizon-mixins key"
     );
-    fs::remove_dir_all(installed_dir).unwrap();
+    fs::write(&record, &planned).unwrap();
+    assert_eq!(set.found().as_deref(), Some(version.as_str()));
+
+    let copy = installed
+        .join(sunrise_launcher_smod::mod_list::NATIVE_DIR)
+        .join("beta");
+    let moved = set.root.join("beta-copy");
+    fs::rename(&copy, &moved).unwrap();
+    assert!(set.found().is_none(), "a missing mod copy");
+    fs::rename(&moved, &copy).unwrap();
+    assert_eq!(set.found().as_deref(), Some(version.as_str()));
+
+    fs::remove_file(installed.join(".installed")).unwrap();
+    assert!(set.found().is_none(), "a build that isn't installed");
+    let _ = fs::remove_dir_all(installed);
+}
+
+/// Each caller that planned a build is kept once, newest last, up to [`ADMISSIONS_KEPT`].
+#[test]
+fn the_evidence_keeps_the_newest_admissions_once() {
+    let _guard = scratch_state();
+    let set = Set::new("reuse-admissions");
+    let version = set.install(&BuildOptions::default());
+    let first = serde_json::json!(Admission::new(BASE, ORIGIN, false));
+    set.edit_evidence(&version, |json| {
+        let others: Vec<serde_json::Value> = (0..10)
+            .map(|n| {
+                let mut other = first.clone();
+                other["base"] = format!("native-aaaaaaa-other{n:07}").into();
+                other
+            })
+            .collect();
+        json["admitted"] = others.into();
+    });
+    set.install(&BuildOptions::default());
+    set.install(&BuildOptions::default());
+    let evidence: serde_json::Value =
+        serde_json::from_slice(&fs::read(set.evidence(&version)).unwrap()).unwrap();
+    let admitted = evidence["admitted"].as_array().unwrap();
+    assert_eq!(admitted.len(), ADMISSIONS_KEPT);
+    assert_eq!(admitted.last(), Some(&first));
+    assert_eq!(admitted.iter().filter(|a| **a == first).count(), 1);
+    assert_eq!(admitted[0]["base"], "native-aaaaaaa-other0000003");
+    let _ = fs::remove_dir_all(backend::version_dir(&version));
+}
+
+/// Through the default build entry (the Mods page's and the CLI's, with no profile chosen), an
+/// installed set is used before the mods are checked to choose the profile: the SDK tool checks
+/// nothing. Without evidence, both that check and the build's own run it.
+#[test]
+fn the_default_build_uses_an_installed_set_without_the_sdk_check() {
+    const TEST: &str =
+        "native_mods::reuse::tests::the_default_build_uses_an_installed_set_without_the_sdk_check";
+    const CHILD: &str = "SUNRISE_REUSE_DEFAULT_BUILD_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, "1")
+            .env("SUNRISE_LAUNCHER_HOME", home.path().join("launcher"))
+            .env("SUNRISE_HOME", home.path().join("home"))
+            .env(
+                "SUNRISE_LAUNCHER_LOCATION_FILE",
+                home.path().join("location"),
+            )
+            .env("SUNRISE_NO_KEYCHAIN", "1")
+            .env("SUNRISE_LAUNCHER_NO_SELF_UPDATE", "1")
+            .env("XDG_DATA_HOME", home.path().join("data"))
+            .env("XDG_CONFIG_HOME", home.path().join("config"))
+            .env_remove(sdk_cache::BASE_VAR)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    // The release the native base was made from, prepared, and the native base on it.
+    let release = backend::version_dir(ORIGIN);
+    fs::create_dir_all(backend::resources(ORIGIN)).unwrap();
+    fs::write(
+        backend::resources(ORIGIN).join("sunrise-resources.json"),
+        "{}",
+    )
+    .unwrap();
+    fs::write(release.join(backend::CLIENT), game_executable()).unwrap();
+    fs::write(release.join(".installed"), "").unwrap();
+    let base = backend::version_dir(BASE);
+    fs::create_dir_all(&base).unwrap();
+    fs::write(
+        base.join(RECORD),
+        format!(r#"{{"base":"{ORIGIN}","sunrise":"{REVISION}","target":"client","left_out":[]}}"#),
+    )
+    .unwrap();
+    fs::write(base.join(backend::CLIENT), game_executable()).unwrap();
+    fs::write(base.join(".installed"), "").unwrap();
+    fs::write(
+        backend::data_dir().join("instances.json"),
+        r#"{"instances":{"sunrise":{}}}"#,
+    )
+    .unwrap();
+    let instance = instances::find("sunrise").unwrap();
+    let set = Set::new("reuse-default-build").on(platform_for_game(BASE).unwrap());
+    let build_default = || {
+        let steps = std::cell::RefCell::new(Vec::new());
+        let checks = SDK_CHECKS.with(std::cell::Cell::get);
+        let built = build(
+            BASE,
+            &set.folder,
+            &instance,
+            None,
+            false,
+            &Cancellation::default(),
+            |step| steps.borrow_mut().push(step),
+            || None,
+        );
+        (
+            built,
+            SDK_CHECKS.with(std::cell::Cell::get) - checks,
+            steps.into_inner(),
+        )
+    };
+
+    let version = set.install(&BuildOptions::default());
+    let (built, checks, steps) = build_default();
+    assert!(
+        matches!(&built, Ok(ClientBuild::Native(found)) if *found == version),
+        "{built:?}"
+    );
+    assert_eq!(checks, 0, "the SDK tool checked nothing");
+    assert_eq!(steps, [Step::Plan(Plan::UpToDate, Profile::Optimized)]);
+    assert_eq!(
+        instances::find("sunrise").unwrap().version.as_deref(),
+        Some(version.as_str()),
+        "the instance plays the build"
+    );
+
+    // Without evidence, the profile check and the build both ask the SDK tool; this SDK has none.
+    fs::remove_file(set.evidence(&version)).unwrap();
+    let (built, checks, _) = build_default();
+    assert!(built.is_err(), "the fixture's SDK has no tool");
+    assert_eq!(checks, 2, "the profile's check and the build's");
 }
