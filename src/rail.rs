@@ -271,6 +271,7 @@ impl Launcher {
         };
         // A small toolbar button, not a row: it names itself in its tooltip only. Ctrl+B does
         // the same, and the search lists that key.
+        let me = cx.weak_entity();
         let toggle = div()
             .flex()
             .flex_none()
@@ -289,10 +290,18 @@ impl Launcher {
                     .rounded(crate::tokens::r(crate::tokens::R_SMALL))
                     .cursor_pointer()
                     .hover(|d| d.bg(rgb(p.chrome_raised)))
-                    .tooltip(crate::glass_ui::tip(if wide {
-                        tr("Hide sidebar")
-                    } else {
-                        tr("Show sidebar")
+                    // Read when the tooltip shows: one that was on its way when the toggle was
+                    // pressed would otherwise offer what it just did.
+                    .tooltip(crate::glass_ui::tip_with(move |cx| {
+                        let wide = me
+                            .upgrade()
+                            .map_or(wide, |me| me.read(cx).settings.sidebar_expanded);
+                        if wide {
+                            tr("Hide sidebar")
+                        } else {
+                            tr("Show sidebar")
+                        }
+                        .into()
                     }))
                     .child(
                         div()
