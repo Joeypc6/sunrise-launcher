@@ -209,7 +209,9 @@ impl Launcher {
             }
         }
         let name = self.servers.value(Field::InstanceName).trim().to_string();
-        let group = Some(self.servers.value(Field::InstanceGroup).to_string());
+        // An empty field is no group, so the sidebar has no blank heading for it.
+        let group = Some(self.servers.value(Field::InstanceGroup).trim().to_string())
+            .filter(|g| !g.is_empty());
         let Some(d) = self.instances.dialog.as_mut().filter(|d| !d.busy) else {
             return;
         };

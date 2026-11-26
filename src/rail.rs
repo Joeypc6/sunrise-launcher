@@ -335,7 +335,38 @@ impl Launcher {
             .gap(px(4.))
             .overflow_y_scroll()
             .track_scroll(&crate::frame::scrolls("sidebar"));
+        // The list comes sorted by group (`instances::list`): each group's name heads its
+        // profiles, while the names show.
+        let mut group: Option<String> = None;
         for (n, i) in self.instances.list.clone().into_iter().enumerate() {
+            // A blank group, as an earlier launcher saved an empty field, is no group.
+            let named = i.group.clone().filter(|g| !g.trim().is_empty());
+            if named.is_some() && named != group {
+                group = named;
+                list = list.child(
+                    div()
+                        .flex_none()
+                        .h(px(22.))
+                        .mt(px(6.))
+                        .px(px(9.))
+                        .flex()
+                        .items_end()
+                        .truncate()
+                        .text_size(px(crate::tokens::SMALL))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(p.chrome_muted))
+                        .opacity(label_opacity(open))
+                        // With the names hidden a short rule still marks where a group begins.
+                        .when(!labelled, |d| {
+                            d.h(px(1.))
+                                .mt(px(4.))
+                                .mx(px(8.))
+                                .bg(rgb(p.chrome_muted))
+                                .opacity(0.5)
+                        })
+                        .when(labelled, |d| d.child(group.clone().unwrap_or_default())),
+                );
+            }
             let on = selected.as_ref() == Some(&i.id);
             let deletable = i.kind == Kind::Own && !self.location_unavailable;
             let more = on && deletable;
