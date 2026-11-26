@@ -10,6 +10,11 @@ use gpui::{Animation, AnimationExt as _};
 use sunrise_launcher::browser::images;
 use sunrise_launcher::browser::sunrise;
 
+/// How many of the compiler's latest lines the live output shows (the pane holds about this many).
+const LIVE_LINES: usize = 12;
+/// How often the live output is read again while it shows.
+const LIVE_REFRESH: std::time::Duration = std::time::Duration::from_millis(500);
+
 impl Launcher {
     /// The build window, while one is open.
     pub(crate) fn build_modal(&mut self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
@@ -179,7 +184,14 @@ impl Launcher {
         let error = stop
             .map(|stop| stop.error.as_str())
             .filter(|s| !s.is_empty());
-        let diagnostic = if run.log_open {
+        // While it runs, the compiler's latest lines, read again on each repaint.
+        let live = (running && run.output_open).then(|| {
+            native_mods::live_tail(LIVE_LINES)
+                .unwrap_or_else(|| tr("Waiting for the compiler's first lines…").to_owned())
+        });
+        let diagnostic = if live.is_some() {
+            live.as_deref()
+        } else if run.log_open {
             run.log.as_deref()
         } else {
             error.filter(|_| run.details)
@@ -227,6 +239,44 @@ impl Launcher {
                     }
                     cx.notify();
                 }))
+        });
+        // While it runs: show or hide the compiler's output as it comes.
+        let output = running.then(|| {
+            let label = if run.output_open {
+                tr("Hide output")
+            } else {
+                tr("Show output")
+            };
+            button("build-output", label).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                let Some(run) = &mut this.mods_state.build else {
+                    return;
+                };
+                run.output_open = !run.output_open;
+                if run.output_open {
+                    // Repaint while it shows, so new lines appear without other news.
+                    cx.spawn(async move |this, cx| loop {
+                        cx.background_executor().timer(LIVE_REFRESH).await;
+                        let Ok(open) = this.update(cx, |this, cx| {
+                            let open = this
+                                .mods_state
+                                .build
+                                .as_ref()
+                                .is_some_and(|run| run.output_open && run.running());
+                            if open {
+                                cx.notify();
+                            }
+                            open
+                        }) else {
+                            break;
+                        };
+                        if !open {
+                            break;
+                        }
+                    })
+                    .detach();
+                }
+                cx.notify();
+            }))
         });
         // Managed Play only offers the log of this attempt, never the latest on disk.
         let log = (!running
@@ -305,6 +355,7 @@ impl Launcher {
                 .flex()
                 .items_center()
                 .gap(px(10.))
+                .children(output)
                 .child(
                     button("build-cancel", tr("Cancel build")).on_click(cx.listener(
                         |this, _: &ClickEvent, _, cx| {
@@ -371,7 +422,9 @@ impl Launcher {
             .children(diagnostic.map(|text| {
                 card().min_w_0().overflow_hidden().child(
                     div()
-                        .id(if run.log_open {
+                        .id(if live.is_some() {
+                            "build-output-pane"
+                        } else if run.log_open {
                             "build-log-pane"
                         } else {
                             "build-error-pane"

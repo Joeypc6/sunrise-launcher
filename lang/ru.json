@@ -2484,5 +2484,8 @@
   "{hours} hr": "{hours} hr",
   "{hours} hr {minutes} min": "{hours} hr {minutes} min",
   "Dev · finding builds…": "Dev · finding builds…",
-  "Dev · builds didn't load": "Dev · builds didn't load"
+  "Dev · builds didn't load": "Dev · builds didn't load",
+  "Show output": "Show output",
+  "Hide output": "Hide output",
+  "Waiting for the compiler's first lines…": "Waiting for the compiler's first lines…"
 }

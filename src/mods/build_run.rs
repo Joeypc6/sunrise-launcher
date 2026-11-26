@@ -94,6 +94,8 @@ pub(crate) struct Run {
     /// Managed Play snapshots the producer's log while it still holds the build lease.
     pub log: Option<std::sync::Arc<str>>,
     pub log_open: bool,
+    /// Whether the live output shows while the build runs.
+    pub output_open: bool,
     /// Play started it; keep that identity until its worker reports the result.
     pub for_play: bool,
     /// The admitted game build; a registry conflict alone cannot authorize an edit.
@@ -140,6 +142,7 @@ impl Run {
             details: false,
             log: None,
             log_open: false,
+            output_open: false,
             for_play,
             failed_build: None,
             stop_requested: false,
