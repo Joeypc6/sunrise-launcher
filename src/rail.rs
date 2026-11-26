@@ -80,7 +80,7 @@ fn profile_lock_reason(
         Some(tr(
             "Fix the data folder in Settings before changing profiles.",
         ))
-    } else if work.busy() {
+    } else if work.holds_profile() {
         Some(tr(
             "Wait for the current operation to finish before changing profiles.",
         ))
@@ -665,6 +665,20 @@ mod tests {
         work.starting = false;
         assert_eq!(profile_lock_reason(&work, true, false), None);
         assert!(profile_lock_reason(&work, false, false).is_some());
+        assert!(profile_lock_reason(&work, true, true).is_some());
+    }
+
+    #[test]
+    fn a_build_downloading_leaves_profiles_free_but_mod_changes_do_not() {
+        let mut work = Facts {
+            installing: Some(0.4),
+            ..Facts::default()
+        };
+        assert_eq!(profile_lock_reason(&work, true, false), None);
+        work.mutating = true;
+        assert!(profile_lock_reason(&work, true, false).is_some());
+        // Play waiting on the download still holds them.
+        work.mutating = false;
         assert!(profile_lock_reason(&work, true, true).is_some());
     }
 }

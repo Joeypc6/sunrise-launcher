@@ -220,6 +220,13 @@ impl Facts {
             || self.starting
     }
 
+    /// Work done on the selected profile, which switching profiles would leave pointing at
+    /// another one. A game build downloading is not: it goes to the versions every profile
+    /// shares, and a build switch keeps the profile it was started on.
+    pub(crate) fn holds_profile(&self) -> bool {
+        self.mutating || self.preparing || self.building || self.starting
+    }
+
     pub(crate) fn view(&self) -> View {
         let busy = self.busy();
         let main = if let Some(progress) = self.installing {
