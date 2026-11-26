@@ -14,6 +14,7 @@ use sunrise_launcher_smod::dependencies;
 
 mod build_log;
 mod bundle;
+mod live_log;
 use build_log::log_warning;
 pub(crate) use build_log::root;
 pub use build_log::{
@@ -24,6 +25,7 @@ pub use bundle::{
     bundle_in, bundles, copy_bundle, digest, scan_bundles, source_digest, Bundle, Target,
     MIXINS_REV, NATIVE_MANIFEST,
 };
+pub use live_log::live_tail;
 mod planning;
 pub use planning::{routes, update_check, UpdateCheck};
 pub(crate) use planning::{source_routes, SourceCheckError};
