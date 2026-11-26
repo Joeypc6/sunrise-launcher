@@ -252,18 +252,21 @@ impl Launcher {
                     return;
                 };
                 run.output_open = !run.output_open;
-                if run.output_open {
+                // At most one repaint loop: reopening while one still runs reuses it.
+                if run.output_open && !run.output_polling {
+                    run.output_polling = true;
                     // Repaint while it shows, so new lines appear without other news.
                     cx.spawn(async move |this, cx| loop {
                         cx.background_executor().timer(LIVE_REFRESH).await;
                         let Ok(open) = this.update(cx, |this, cx| {
-                            let open = this
-                                .mods_state
-                                .build
-                                .as_ref()
-                                .is_some_and(|run| run.output_open && run.running());
+                            let Some(run) = this.mods_state.build.as_mut() else {
+                                return false;
+                            };
+                            let open = run.output_open && run.running();
                             if open {
                                 cx.notify();
+                            } else {
+                                run.output_polling = false;
                             }
                             open
                         }) else {

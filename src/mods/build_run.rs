@@ -96,6 +96,8 @@ pub(crate) struct Run {
     pub log_open: bool,
     /// Whether the live output shows while the build runs.
     pub output_open: bool,
+    /// Whether the output pane's repaint loop is running, so toggling starts at most one.
+    pub output_polling: bool,
     /// Play started it; keep that identity until its worker reports the result.
     pub for_play: bool,
     /// The admitted game build; a registry conflict alone cannot authorize an edit.
@@ -143,6 +145,7 @@ impl Run {
             log: None,
             log_open: false,
             output_open: false,
+            output_polling: false,
             for_play,
             failed_build: None,
             stop_requested: false,
