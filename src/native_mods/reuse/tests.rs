@@ -4,18 +4,20 @@ use std::process::Command;
 
 /// The Sunrise commit the sets build: not the mods' own pin, whose SDK index other tests keep.
 const REVISION: &str = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+/// The mods' own Sunrise pin (`write_bundle`): what a developer base must build.
+const PINNED: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const C: &str = "cccccccccccccccccccccccccccccccccccccccc";
 const BASE: &str = "native-aaaaaaa-base00000000";
 const ORIGIN: &str = "26.3-0.1.0";
 
-/// Keeps a signed SDK index for Sunrise [`REVISION`], as a planned build leaves it; `date` makes another
-/// index for the same build.
-fn keep_index(date: &str) {
+/// Keeps a signed SDK index for Sunrise `commit`, as a planned build leaves it; `date` makes
+/// another index for the same build.
+fn keep_index(commit: &str, date: &str) {
     let mut index = sdk_cache::tests::index_of(&[], rust_toolchain::VERSION);
-    index.build.commit = REVISION.into();
+    index.build.commit = commit.into();
     index.build.date = date.into();
-    let folder = sdk_cache::build_folder(REVISION);
+    let folder = sdk_cache::build_folder(commit);
     fs::create_dir_all(&folder).unwrap();
     fs::write(
         folder.join(sunrise_launcher_sdk::INDEX),
@@ -39,16 +41,45 @@ fn game_executable() -> Vec<u8> {
     image
 }
 
-/// An instance with two native mods, built on a native build whose record names Sunrise `REVISION`.
+/// An instance with two native mods, and the base its builds start from.
 struct Set {
     root: PathBuf,
     folder: PathBuf,
-    built_on: About,
+    base: String,
+    /// The native build the base is, if it is one.
+    built_on: Option<About>,
+    /// The Sunrise commit its builds compile.
+    revision: &'static str,
+    /// The release its builds start from.
+    origin: String,
     platform: BuildPlatform,
+    /// The SDK base setting its plans are admitted under.
+    sdk_base: Option<String>,
 }
 
 impl Set {
+    /// Built on the native build [`BASE`], whose record names Sunrise [`REVISION`].
     fn new(name: &str) -> Self {
+        keep_index(REVISION, "2026-11-13");
+        Self::on_base(
+            name,
+            BASE,
+            Some(About {
+                base: ORIGIN.into(),
+                sunrise: REVISION.into(),
+                target: Target::Client,
+                left_out: Vec::new(),
+            }),
+        )
+    }
+
+    /// Built on developer base `base`, a checkout of the mods' own pin ([`PINNED`]): a plan of it
+    /// runs no SDK check.
+    fn developer(name: &str, base: &str) -> Self {
+        Self::on_base(name, base, None)
+    }
+
+    fn on_base(name: &str, base: &str, built_on: Option<About>) -> Self {
         let root = dir(name);
         let folder = root.join("instance").join("native");
         write_bundle(&folder.join("alpha"), "alpha", "pub fn alpha() {}\n");
@@ -58,18 +89,22 @@ impl Set {
             "beta",
             &format!("pub fn beta() {{}}\n// {name}\n"),
         );
-        keep_index("2026-11-13");
         Self {
             root,
             folder,
-            built_on: About {
-                base: ORIGIN.into(),
-                sunrise: REVISION.into(),
-                target: Target::Client,
-                left_out: Vec::new(),
-            },
+            base: base.to_owned(),
+            revision: built_on.as_ref().map_or(PINNED, |_| REVISION),
+            origin: built_on
+                .as_ref()
+                .map_or(base.to_owned(), |about| about.base.clone()),
+            built_on,
             platform: BuildPlatform::default(),
+            sdk_base: None,
         }
+    }
+
+    fn developer_base(&self) -> bool {
+        crate::developer_install::is_developer(&self.origin)
     }
 
     /// The same set, built for `platform`.
@@ -107,9 +142,9 @@ impl Set {
 
     fn request<'a>(&'a self, options: &'a BuildOptions<'a>) -> Request<'a> {
         Request {
-            base: BASE,
+            base: &self.base,
             folder: &self.folder,
-            built_on: Some(&self.built_on),
+            built_on: self.built_on.as_ref(),
             platform: self.platform,
             profile: Profile::Optimized,
             target: Target::Client,
@@ -125,8 +160,9 @@ impl Set {
         self.found_with(&BuildOptions::default())
     }
 
-    /// Plans the set as `pipeline` does, without the SDK check, installs what it would build,
-    /// and keeps the evidence `pipeline` keeps for it. Returns the build's version.
+    /// Plans the set as `pipeline` does, without the SDK check, installs what it would build
+    /// unless a build there holds the plan (`installable`), and keeps the evidence `pipeline`
+    /// keeps for it. Returns the build's version.
     fn install(&self, options: &BuildOptions<'_>) -> String {
         let found = scan_bundles(&self.folder).unwrap();
         let digests: HashMap<String, Option<String>> = found
@@ -145,64 +181,75 @@ impl Set {
         let ordered: Vec<Bundle> = links.order.iter().map(|&i| mods[i].clone()).collect();
         let keys = sunrise_launcher_release_verify::sdk_keys_for(backend::GAME_REPO);
         let sdk_base = sdk_cache::Base::from_env();
-        let sdk = sdk_cache::index(&sdk_base, REVISION, &keys).unwrap();
-        let (pins, mut read) = mixins::read_pins(&mods, Some(&sdk), None, |pin| {
+        let developer = self.developer_base();
+        let sdk = (!developer).then(|| sdk_cache::index(&sdk_base, self.revision, &keys).unwrap());
+        let (pins, mut read) = mixins::read_pins(&mods, sdk.as_ref(), None, |pin| {
             Ok(sdk_cache::index(&sdk_base, pin, &keys)?)
         })
         .unwrap();
-        read.sdk.insert(REVISION.into(), sdk.signed().to_owned());
+        if let Some(sdk) = &sdk {
+            read.sdk
+                .insert(self.revision.into(), sdk.signed().to_owned());
+        }
         for (bundle, pin) in mods.iter().zip(&pins) {
             mixins::materialize(bundle, &bundle.dir, pin).unwrap();
         }
         let mixins = mixins::for_key(&pins, |_| panic!("one pin")).unwrap();
         let version = version_for(
-            REVISION,
+            self.revision,
             &mixins,
             Profile::Optimized,
             Target::Client,
-            platform_key(false, self.platform, ORIGIN).as_deref(),
+            platform_key(developer, self.platform, &self.origin).as_deref(),
             &requested,
             &left_out,
         )
         .unwrap();
-        // A build already installed is used again, as `pipeline` does: only its evidence changes.
-        let installed = backend::version_dir(&version);
-        if !installed.join(".installed").is_file() {
-            self.publish(&installed, &mixins, &left_out, &mods, &ordered, &digests);
+        let contents = Contents {
+            revision: self.revision,
+            origin: &self.origin,
+            mixins: &mixins,
+            profile: Profile::Optimized,
+            kept: &mods,
+            digests: &digests,
+            left_out: &left_out,
+        };
+        let (version, exists) = installable(&version, &contents).unwrap();
+        if !exists {
+            self.publish(&version, &mixins, &left_out, &mods, &ordered, &digests);
         }
         super::record(&Planned {
             version: &version,
             image: Image::new(&mods, &pins, &ordered, &dispatch, &left_out, &read),
-            admission: Admission::new(BASE, ORIGIN, options.exact_home.is_some()),
-            contents: Contents {
-                revision: REVISION,
-                origin: ORIGIN,
-                mixins: &mixins,
-                profile: Profile::Optimized,
-                kept: &mods,
-                digests: &digests,
-                left_out: &left_out,
-            },
+            admission: Admission::with_sdk_base(
+                &self.base,
+                &self.origin,
+                options.exact_home.is_some(),
+                self.sdk_base.as_deref().map(std::ffi::OsStr::new),
+            ),
+            contents: &contents,
         });
         version
     }
 
-    /// Installs what `pipeline` would for the set, as `installation::install` lays it out.
+    /// Installs what `pipeline` would for the set as `version`, laid out as
+    /// `installation::install` lays it out.
     fn publish(
         &self,
-        installed: &Path,
+        version: &str,
         mixins: &str,
         left_out: &[LeftOut],
         mods: &[Bundle],
         ordered: &[Bundle],
         digests: &HashMap<String, Option<String>>,
     ) {
-        let _ = fs::remove_dir_all(installed);
-        fs::create_dir_all(installed).unwrap();
+        let installed = backend::version_dir(version);
+        let _ = fs::remove_dir_all(&installed);
+        fs::create_dir_all(&installed).unwrap();
         fs::write(installed.join(backend::CLIENT), game_executable()).unwrap();
         let record = serde_json::json!({
-            "base": ORIGIN,
-            "sunrise": REVISION,
+            "base": self.origin,
+            "sunrise": self.revision,
             "horizon_mixins": mixins,
             "rust": rust_toolchain::VERSION,
             "profile": Profile::Optimized.name(),
@@ -240,12 +287,46 @@ impl Set {
         edit(&mut json);
         fs::write(path, json.to_string()).unwrap();
     }
+
+    /// Turns installed build `version` of the whole set into what a launcher before this one
+    /// installed under the same version for a build without `left`: no evidence, a record of the
+    /// set without it, and no copy of it.
+    fn make_reduced(&self, version: &str, left: &LeftOut) {
+        let installed = backend::version_dir(version);
+        let _ = fs::remove_file(self.evidence(version));
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&fs::read(installed.join(RECORD)).unwrap()).unwrap();
+        record["left_out"] = serde_json::json!([left.to_json()]);
+        record["mods"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|m| m["id"] != left.id.as_str());
+        fs::write(installed.join(RECORD), record.to_string()).unwrap();
+        fs::remove_dir_all(
+            installed
+                .join(sunrise_launcher_smod::mod_list::NATIVE_DIR)
+                .join(&left.id),
+        )
+        .unwrap();
+    }
+
+    /// The left-out entry for `id`, as a build that failed to compile it keeps it.
+    fn left(&self, id: &str) -> LeftOut {
+        let bundle = scan_bundles(&self.folder)
+            .unwrap()
+            .into_iter()
+            .find(|b| b.manifest.id == id)
+            .unwrap();
+        LeftOut::new(&bundle, isolate::Why::DidNotBuild)
+    }
 }
 
 impl Drop for Set {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
-        let _ = fs::remove_dir_all(sdk_cache::build_folder(REVISION));
+        if self.built_on.is_some() {
+            let _ = fs::remove_dir_all(sdk_cache::build_folder(self.revision));
+        }
     }
 }
 
@@ -316,7 +397,7 @@ fn an_input_that_changes_the_build_misses_it() {
     fs::write(&manifest, &pinned).unwrap();
     assert_eq!(set.found().as_deref(), Some(version.as_str()));
 
-    keep_index("2026-11-14");
+    keep_index(REVISION, "2026-11-14");
     assert!(
         set.found().is_none(),
         "another SDK index for the build, with the same pins"
@@ -326,7 +407,7 @@ fn an_input_that_changes_the_build_misses_it() {
         set.found().is_none(),
         "no SDK index kept: nothing is fetched"
     );
-    keep_index("2026-11-13");
+    keep_index(REVISION, "2026-11-13");
     assert_eq!(set.found().as_deref(), Some(version.as_str()));
 
     let windows = Set::new("reuse-image-windows").on(BuildPlatform {
@@ -402,14 +483,14 @@ fn a_rule_that_only_admits_the_plan_misses_until_it_admits_it() {
 }
 
 /// A build without a mod is another version than the whole set's, so it never stands in for
-/// it; and a reduced build under the whole set's version (as launchers before this installed
-/// one) is never recorded as the whole set.
+/// it. A reduced build an older launcher installed under the whole set's version is never used
+/// for the whole set either: the plan installs under the next version, and leaves the old build
+/// as it is.
 #[test]
 fn a_reduced_build_never_satisfies_the_whole_set() {
     let _guard = scratch_state();
     let set = Set::new("reuse-reduced");
-    let beta = scan_bundles(&set.folder).unwrap().remove(1);
-    let skip = [LeftOut::new(&beta, isolate::Why::DidNotBuild)];
+    let skip = [set.left("beta")];
     let reduced = BuildOptions {
         skip: &skip,
         ..BuildOptions::default()
@@ -426,104 +507,91 @@ fn a_reduced_build_never_satisfies_the_whole_set() {
     assert_eq!(set.found_with(&reduced).as_deref(), Some(without.as_str()));
 
     // An older launcher's reduced build, installed under the whole set's version.
-    let installed = backend::version_dir(&whole);
-    fs::remove_file(set.evidence(&whole)).unwrap();
-    let mut record: serde_json::Value =
-        serde_json::from_slice(&fs::read(installed.join(RECORD)).unwrap()).unwrap();
-    record["left_out"] = serde_json::json!([skip[0].to_json()]);
-    record["mods"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|m| m["id"] != "beta");
-    fs::write(installed.join(RECORD), record.to_string()).unwrap();
-    fs::remove_dir_all(
-        installed
-            .join(sunrise_launcher_smod::mod_list::NATIVE_DIR)
-            .join("beta"),
-    )
-    .unwrap();
-    assert_eq!(set.install_planned_only(&whole), whole);
-    assert!(
-        !set.evidence(&whole).exists(),
-        "a build that doesn't hold the plan keeps no evidence"
+    set.make_reduced(&whole, &skip[0]);
+    let record = fs::read(backend::version_dir(&whole).join(RECORD)).unwrap();
+    assert!(set.found().is_none(), "the old build isn't the whole set");
+    let replaced = set.install(&BuildOptions::default());
+    assert_ne!(
+        replaced, whole,
+        "the whole set is built under the next version"
     );
-    assert!(set.found().is_none());
-    for version in [whole, without] {
+    assert_eq!(set.found().as_deref(), Some(replaced.as_str()));
+    assert_eq!(
+        fs::read(backend::version_dir(&whole).join(RECORD)).unwrap(),
+        record,
+        "the old build is left as it is"
+    );
+    assert!(!set.evidence(&whole).exists(), "and never sealed");
+    assert_eq!(
+        set.install(&BuildOptions::default()),
+        replaced,
+        "the same next version every time"
+    );
+    for version in [whole, without, replaced] {
         let _ = fs::remove_dir_all(backend::version_dir(&version));
     }
 }
 
-impl Set {
-    /// What `pipeline` records for the whole set when its build is already installed as
-    /// `version`, without installing anything.
-    fn install_planned_only(&self, version: &str) -> String {
-        let found = scan_bundles(&self.folder).unwrap();
-        let digests: HashMap<String, Option<String>> = found
-            .iter()
-            .map(|b| (b.manifest.id.clone(), source_digest(b)))
-            .collect();
-        let read = mixins::Read {
-            sdk: [(
-                REVISION.to_owned(),
-                sdk_cache::kept(REVISION).unwrap().signed().to_owned(),
-            )]
-            .into(),
-            local: None,
-        };
-        let pins = [B.to_owned(), B.to_owned()];
-        super::record(&Planned {
-            version,
-            image: Image::new(
-                &found,
-                &pins,
-                &found,
-                &["alpha".into(), "beta".into()],
-                &[],
-                &read,
-            ),
-            admission: Admission::new(BASE, ORIGIN, false),
-            contents: Contents {
-                revision: REVISION,
-                origin: ORIGIN,
-                mixins: B,
-                profile: Profile::Optimized,
-                kept: &found,
-                digests: &digests,
-                left_out: &[],
-            },
-        });
-        version.to_owned()
-    }
-}
-
-/// No evidence, a torn file, another layout, or the record of the launcher before this one
-/// (`.native-inputs`) finds nothing: the build is planned, and the plan keeps evidence again.
+/// No evidence, or the record of the launcher before this one (`.native-inputs`), finds
+/// nothing; the plan then seals the build as it is, once. Evidence that can't be read (torn,
+/// another layout, an unknown field) is never sealed again: the plan installs under the next
+/// version.
 #[test]
 fn missing_torn_or_older_evidence_plans_the_build() {
     let _guard = scratch_state();
     let set = Set::new("reuse-evidence");
     let version = set.install(&BuildOptions::default());
     let path = set.evidence(&version);
-    let whole = fs::read(&path).unwrap();
-    fs::write(&path, &whole[..whole.len() / 2]).unwrap();
-    assert!(set.found().is_none(), "a torn file");
-    set.install(&BuildOptions::default());
-    set.edit_evidence(&version, |json| json["schema"] = 0.into());
-    assert!(set.found().is_none(), "another layout");
-    set.install(&BuildOptions::default());
-    set.edit_evidence(&version, |json| json["extra"] = true.into());
-    assert!(set.found().is_none(), "an unknown field");
     fs::remove_file(&path).unwrap();
     let older = backend::version_dir(&version).join(".native-inputs");
     fs::write(&older, "0123\n").unwrap();
-    assert!(set.found().is_none(), "the record of the launcher before");
-    set.install(&BuildOptions::default());
+    assert!(set.found().is_none(), "no evidence");
+    assert_eq!(set.install(&BuildOptions::default()), version);
     assert_eq!(set.found().as_deref(), Some(version.as_str()));
     let _ = fs::remove_dir_all(backend::version_dir(&version));
+
+    let torn = |text: &[u8]| text[..text.len() / 2].to_vec();
+    let schema = |text: &[u8]| {
+        let mut json: serde_json::Value = serde_json::from_slice(text).unwrap();
+        json["schema"] = 0.into();
+        json.to_string().into_bytes()
+    };
+    let extra = |text: &[u8]| {
+        let mut json: serde_json::Value = serde_json::from_slice(text).unwrap();
+        json["extra"] = true.into();
+        json.to_string().into_bytes()
+    };
+    type Change = dyn Fn(&[u8]) -> Vec<u8>;
+    let cases: [(&str, &Change); 3] = [
+        ("torn", &torn),
+        ("another layout", &schema),
+        ("an unknown field", &extra),
+    ];
+    for (n, (case, change)) in cases.into_iter().enumerate() {
+        let set = Set::new(&format!("reuse-evidence-{n}"));
+        let version = set.install(&BuildOptions::default());
+        let path = set.evidence(&version);
+        let changed = change(&fs::read(&path).unwrap());
+        fs::write(&path, &changed).unwrap();
+        assert!(set.found().is_none(), "{case}");
+        let next = set.install(&BuildOptions::default());
+        assert_ne!(next, version, "{case}: built under the next version");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            changed,
+            "{case}: not sealed again"
+        );
+        assert_eq!(set.found().as_deref(), Some(next.as_str()), "{case}");
+        for version in [version, next] {
+            let _ = fs::remove_dir_all(backend::version_dir(&version));
+        }
+    }
 }
 
 /// The installed build must still be the one sealed and planned: a changed game, a record that
-/// names other mods or another pin, a missing mod copy, or no completion marker misses.
+/// names other mods or another pin, a missing mod copy, or no completion marker misses. A plan
+/// never seals a game changed after it was sealed: it builds under the next version, and the
+/// changed game is never found again.
 #[test]
 fn an_installed_build_that_changed_misses() {
     let _guard = scratch_state();
@@ -564,9 +632,24 @@ fn an_installed_build_that_changed_misses() {
     fs::rename(&moved, &copy).unwrap();
     assert_eq!(set.found().as_deref(), Some(version.as_str()));
 
+    // The game changes after it was sealed, and the set is planned again.
+    let evidence = fs::read(set.evidence(&version)).unwrap();
+    fs::write(&game, b"another game").unwrap();
+    let next = set.install(&BuildOptions::default());
+    assert_ne!(next, version, "built under the next version");
+    assert_eq!(
+        fs::read(set.evidence(&version)).unwrap(),
+        evidence,
+        "the changed game isn't sealed"
+    );
+    assert_eq!(set.found().as_deref(), Some(next.as_str()));
+
     fs::remove_file(installed.join(".installed")).unwrap();
+    fs::remove_file(backend::version_dir(&next).join(".installed")).unwrap();
     assert!(set.found().is_none(), "a build that isn't installed");
-    let _ = fs::remove_dir_all(installed);
+    for version in [version, next] {
+        let _ = fs::remove_dir_all(backend::version_dir(&version));
+    }
 }
 
 /// Each caller that planned a build is kept once, newest last, up to [`ADMISSIONS_KEPT`].
@@ -575,7 +658,7 @@ fn the_evidence_keeps_the_newest_admissions_once() {
     let _guard = scratch_state();
     let set = Set::new("reuse-admissions");
     let version = set.install(&BuildOptions::default());
-    let first = serde_json::json!(Admission::new(BASE, ORIGIN, false));
+    let first = serde_json::json!(Admission::with_sdk_base(BASE, ORIGIN, false, None));
     set.edit_evidence(&version, |json| {
         let others: Vec<serde_json::Value> = (0..10)
             .map(|n| {
@@ -598,83 +681,122 @@ fn the_evidence_keeps_the_newest_admissions_once() {
     let _ = fs::remove_dir_all(backend::version_dir(&version));
 }
 
-/// Through the default build entry (the Mods page's and the CLI's, with no profile chosen), an
-/// installed set is used before the mods are checked to choose the profile: the SDK tool checks
-/// nothing. Without evidence, both that check and the build's own run it.
+/// The SDK base setting can hold a mirror's credentials: the evidence keeps a fingerprint of
+/// it, which tells another setting apart, and never the setting.
 #[test]
-fn the_default_build_uses_an_installed_set_without_the_sdk_check() {
-    const TEST: &str =
-        "native_mods::reuse::tests::the_default_build_uses_an_installed_set_without_the_sdk_check";
-    const CHILD: &str = "SUNRISE_REUSE_DEFAULT_BUILD_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let home = tempfile::tempdir().unwrap();
-        let status = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", TEST, "--nocapture"])
-            .env(CHILD, "1")
-            .env("SUNRISE_LAUNCHER_HOME", home.path().join("launcher"))
-            .env("SUNRISE_HOME", home.path().join("home"))
-            .env(
-                "SUNRISE_LAUNCHER_LOCATION_FILE",
-                home.path().join("location"),
-            )
-            .env("SUNRISE_NO_KEYCHAIN", "1")
-            .env("SUNRISE_LAUNCHER_NO_SELF_UPDATE", "1")
-            .env("XDG_DATA_HOME", home.path().join("data"))
-            .env("XDG_CONFIG_HOME", home.path().join("config"))
-            .env_remove(sdk_cache::BASE_VAR)
-            .status()
-            .unwrap();
-        assert!(status.success());
-        return;
+fn the_evidence_never_holds_the_sdk_base_setting() {
+    let _guard = scratch_state();
+    let mut set = Set::new("reuse-sdk-base");
+    let setting = "https://reader:s3cret-token@mirror.example/sdk";
+    set.sdk_base = Some(setting.into());
+    let version = set.install(&BuildOptions::default());
+    let text = fs::read_to_string(set.evidence(&version)).unwrap();
+    for part in [setting, "s3cret-token", "mirror.example", "reader"] {
+        assert!(!text.contains(part), "{part} in {text}");
     }
-    // The release the native base was made from, prepared, and the native base on it.
-    let release = backend::version_dir(ORIGIN);
-    fs::create_dir_all(backend::resources(ORIGIN)).unwrap();
-    fs::write(
-        backend::resources(ORIGIN).join("sunrise-resources.json"),
-        "{}",
-    )
-    .unwrap();
-    fs::write(release.join(backend::CLIENT), game_executable()).unwrap();
-    fs::write(release.join(".installed"), "").unwrap();
-    let base = backend::version_dir(BASE);
-    fs::create_dir_all(&base).unwrap();
-    fs::write(
-        base.join(RECORD),
-        format!(r#"{{"base":"{ORIGIN}","sunrise":"{REVISION}","target":"client","left_out":[]}}"#),
-    )
-    .unwrap();
-    fs::write(base.join(backend::CLIENT), game_executable()).unwrap();
-    fs::write(base.join(".installed"), "").unwrap();
+    let admission = |setting: Option<&str>| {
+        Admission::with_sdk_base(BASE, ORIGIN, false, setting.map(std::ffi::OsStr::new))
+    };
+    assert_eq!(admission(Some(setting)), admission(Some(setting)));
+    assert_ne!(
+        admission(Some(setting)),
+        admission(Some("https://reader:other@mirror.example/sdk"))
+    );
+    assert_ne!(admission(Some(setting)), admission(None));
+    let _ = fs::remove_dir_all(backend::version_dir(&version));
+}
+
+/// Runs `test` again in a child process with its own launcher and game folders.
+fn in_child(test: &str, child: &str) -> bool {
+    if std::env::var_os(child).is_some() {
+        return true;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env(child, "1")
+        .env("SUNRISE_LAUNCHER_HOME", home.path().join("launcher"))
+        .env("SUNRISE_HOME", home.path().join("home"))
+        .env(
+            "SUNRISE_LAUNCHER_LOCATION_FILE",
+            home.path().join("location"),
+        )
+        .env("SUNRISE_NO_KEYCHAIN", "1")
+        .env("SUNRISE_LAUNCHER_NO_SELF_UPDATE", "1")
+        .env("XDG_DATA_HOME", home.path().join("data"))
+        .env("XDG_CONFIG_HOME", home.path().join("config"))
+        .env_remove(sdk_cache::BASE_VAR)
+        .env_remove(sdk_cache::DEVELOPER_SDK)
+        .env_remove(sdk_cache::DEVELOPER_TOOL)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    false
+}
+
+/// Installs, prepared, release or developer base `tag`, and the instance `sunrise`.
+fn install_base(tag: &str, files: &[(&str, String)]) -> Instance {
+    let dir = backend::version_dir(tag);
+    fs::create_dir_all(backend::resources(tag)).unwrap();
+    fs::write(backend::resources(tag).join("sunrise-resources.json"), "{}").unwrap();
+    for (name, text) in files {
+        fs::write(dir.join(name), text).unwrap();
+    }
+    fs::write(dir.join(backend::CLIENT), game_executable()).unwrap();
+    fs::write(dir.join(".installed"), "").unwrap();
     fs::write(
         backend::data_dir().join("instances.json"),
         r#"{"instances":{"sunrise":{}}}"#,
     )
     .unwrap();
-    let instance = instances::find("sunrise").unwrap();
+    instances::find("sunrise").unwrap()
+}
+
+/// `set` built through the default entry for `instance` on `base`: the result, how many times
+/// the SDK tool was asked to check mods, and the steps said.
+fn build_default(
+    set: &Set,
+    instance: &Instance,
+) -> (Result<ClientBuild, Failed>, usize, Vec<Step>) {
+    let steps = std::cell::RefCell::new(Vec::new());
+    let checks = SDK_CHECKS.with(std::cell::Cell::get);
+    let built = build(
+        &set.base,
+        &set.folder,
+        instance,
+        None,
+        false,
+        &Cancellation::default(),
+        |step| steps.borrow_mut().push(step),
+        || None,
+    );
+    (
+        built,
+        SDK_CHECKS.with(std::cell::Cell::get) - checks,
+        steps.into_inner(),
+    )
+}
+
+/// Through the default build entry (the Mods page's and the CLI's, with no profile chosen), an
+/// installed set is used before the mods are checked to choose the profile: the SDK tool checks
+/// nothing. Without evidence, both that check and the build's own run it.
+#[test]
+fn the_default_build_uses_an_installed_set_without_the_sdk_check() {
+    if !in_child(
+        "native_mods::reuse::tests::the_default_build_uses_an_installed_set_without_the_sdk_check",
+        "SUNRISE_REUSE_DEFAULT_BUILD_CHILD",
+    ) {
+        return;
+    }
+    // The release the native base was made from, and the native base on it.
+    install_base(ORIGIN, &[]);
+    let record =
+        format!(r#"{{"base":"{ORIGIN}","sunrise":"{REVISION}","target":"client","left_out":[]}}"#);
+    let instance = install_base(BASE, &[(RECORD, record)]);
     let set = Set::new("reuse-default-build").on(platform_for_game(BASE).unwrap());
-    let build_default = || {
-        let steps = std::cell::RefCell::new(Vec::new());
-        let checks = SDK_CHECKS.with(std::cell::Cell::get);
-        let built = build(
-            BASE,
-            &set.folder,
-            &instance,
-            None,
-            false,
-            &Cancellation::default(),
-            |step| steps.borrow_mut().push(step),
-            || None,
-        );
-        (
-            built,
-            SDK_CHECKS.with(std::cell::Cell::get) - checks,
-            steps.into_inner(),
-        )
-    };
 
     let version = set.install(&BuildOptions::default());
-    let (built, checks, steps) = build_default();
+    let (built, checks, steps) = build_default(&set, &instance);
     assert!(
         matches!(&built, Ok(ClientBuild::Native(found)) if *found == version),
         "{built:?}"
@@ -689,7 +811,85 @@ fn the_default_build_uses_an_installed_set_without_the_sdk_check() {
 
     // Without evidence, the profile check and the build both ask the SDK tool; this SDK has none.
     fs::remove_file(set.evidence(&version)).unwrap();
-    let (built, checks, _) = build_default();
+    let (built, checks, _) = build_default(&set, &instance);
     assert!(built.is_err(), "the fixture's SDK has no tool");
     assert_eq!(checks, 2, "the profile's check and the build's");
+}
+
+/// Through the default build entry on a developer base, which plans without any SDK check, so
+/// the planned path reaches the installed build: an older launcher's reduced build under the
+/// whole set's version is neither said to be up to date nor played, and a game changed after
+/// it was sealed is neither sealed again nor found on the next build. Both plans build under
+/// the next version instead, which this fixture can't compile.
+#[test]
+fn the_default_build_never_takes_a_reduced_or_changed_build() {
+    if !in_child(
+        "native_mods::reuse::tests::the_default_build_never_takes_a_reduced_or_changed_build",
+        "SUNRISE_REUSE_NEVER_TAKES_CHILD",
+    ) {
+        return;
+    }
+    const DEVELOPER: &str = "developer-reuse";
+    let developer = format!(r#"{{"revision":"{PINNED}"}}"#);
+    let instance = install_base(DEVELOPER, &[("developer.json", developer)]);
+    // The developer base's commit has an SDK release, kept, with no build tool: a plan that gets
+    // as far as compiling stops there.
+    keep_index(PINNED, "2026-11-13");
+    let platform = platform_for_game(DEVELOPER).unwrap();
+    let up_to_date = |steps: &[Step]| {
+        steps
+            .iter()
+            .any(|step| matches!(step, Step::Plan(Plan::UpToDate, _)))
+    };
+
+    // An older launcher's build without beta, under the whole set's version.
+    let set = Set::developer("reuse-legacy-reduced", DEVELOPER).on(platform);
+    let whole = set.install(&BuildOptions::default());
+    set.make_reduced(&whole, &set.left("beta"));
+    let record = fs::read(backend::version_dir(&whole).join(RECORD)).unwrap();
+    let (built, _, steps) = build_default(&set, &instance);
+    assert!(built.is_err(), "the next version is built: {built:?}");
+    assert!(!up_to_date(&steps), "{steps:?}");
+    assert_eq!(
+        instances::find("sunrise").unwrap().version,
+        None,
+        "the instance doesn't play the reduced build"
+    );
+    assert_eq!(
+        fs::read(backend::version_dir(&whole).join(RECORD)).unwrap(),
+        record
+    );
+    assert!(
+        !set.evidence(&whole).exists(),
+        "the reduced build isn't sealed"
+    );
+
+    // A build that was sealed, then its game changed.
+    let set = Set::developer("reuse-changed-game", DEVELOPER).on(platform);
+    let version = set.install(&BuildOptions::default());
+    let (built, _, steps) = build_default(&set, &instance);
+    assert!(
+        matches!(&built, Ok(ClientBuild::Native(found)) if *found == version),
+        "{built:?}"
+    );
+    assert!(up_to_date(&steps));
+    let evidence = fs::read(set.evidence(&version)).unwrap();
+    fs::write(
+        backend::version_dir(&version).join(backend::CLIENT),
+        b"another game",
+    )
+    .unwrap();
+    for attempt in ["first", "next"] {
+        let (built, _, steps) = build_default(&set, &instance);
+        assert!(
+            built.is_err(),
+            "{attempt}: the next version is built: {built:?}"
+        );
+        assert!(!up_to_date(&steps), "{attempt}: {steps:?}");
+        assert_eq!(
+            fs::read(set.evidence(&version)).unwrap(),
+            evidence,
+            "{attempt}: the changed game isn't sealed"
+        );
+    }
 }

@@ -1876,6 +1876,25 @@ fn pipeline(
         &requested,
         &left_out,
     )?;
+    // What an installed client build of this plan holds.
+    let contents = reuse::Contents {
+        revision: &revision,
+        origin,
+        mixins: &mixins,
+        profile,
+        kept: &mods,
+        digests: &digests,
+        left_out: &left_out,
+    };
+    // A client build is used again only when the build there holds this plan; else the plan
+    // installs under the next version (`reuse::versions`).
+    let (version, exists) = match target {
+        Target::Client => reuse::installable(&version, &contents)?,
+        Target::Server => {
+            let exists = target.directory(&version).join(".installed").is_file();
+            (version, exists)
+        }
+    };
     // Kept beside a client build once it is installed or used again: what the fast path proves
     // it with next time (`reuse`).
     let record = || {
@@ -1886,22 +1905,13 @@ fn pipeline(
             version: &version,
             image: reuse::Image::new(&mods, &mixins_pins, &ordered, &dispatch, &left_out, &read),
             admission: reuse::Admission::new(base, origin, options.exact_home.is_some()),
-            contents: reuse::Contents {
-                revision: &revision,
-                origin,
-                mixins: &mixins,
-                profile,
-                kept: &mods,
-                digests: &digests,
-                left_out: &left_out,
-            },
+            contents: &contents,
         });
     };
     if let Some(stage) = options.staging {
         let _publication = crate::run_leases::installation().map_err(cache_error)?;
         stage.retain_target(&version)?;
     }
-    let exists = target.directory(&version).join(".installed").is_file();
     timed("Planning the build", started)?;
     let fetching = std::time::Instant::now();
     let prebuilt = if exists {
