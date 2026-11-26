@@ -674,37 +674,8 @@ impl Launcher {
                         .into_any_element()
                 }
                 None => {
-                    // Install takes only some of the members: say how many, and the tooltip says
-                    // why the rest wait, rather than a bare Install beside "1 of 4 mods fit".
-                    let unfit = all - fitting;
-                    let optional = collection
-                        .members
-                        .iter()
-                        .filter(|&&(i, default)| {
-                            !default && cards[i].fit.fits() && !is_installed(&cards[i].id)
-                        })
-                        .count();
-                    let count = to_install.len().to_string();
-                    let of = [("count", count.as_str()), ("all", &all.to_string())];
-                    let why = match (unfit > 0, optional > 0) {
-                        (true, false) => Some(trf(
-                            "Installs {count} of its {all} mods: the rest don't fit this build yet.",
-                            &of,
-                        )),
-                        (false, true) => Some(trf(
-                            "Installs {count} of its {all} mods: the rest are optional. Open it to add them.",
-                            &of,
-                        )),
-                        (true, true) => Some(trf(
-                            "Installs {count} of its {all} mods: some don't fit this build yet and some are optional. Open it to choose.",
-                            &of,
-                        )),
-                        (false, false) => None,
-                    };
-                    let label = match why {
-                        Some(_) => trf("Install {count}", &[("count", &count)]),
-                        None => tr("Install").to_owned(),
-                    };
+                    let (label, why) =
+                        collection.install_label(cards, to_install.len(), &is_installed);
                     let (card, ids) = (id.clone(), to_install);
                     button(("alt-collection-add", n), label)
                         .when_some(why, |d, why| d.tooltip(crate::glass_ui::tip(why)))
