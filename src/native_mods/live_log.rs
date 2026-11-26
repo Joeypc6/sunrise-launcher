@@ -2,97 +2,114 @@
 //! `build_log.rs` is a copy of the game's file, so this stays apart from it.
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// The SDK workspace's `build.log` while a build runs; `None` between builds.
-static LIVE: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// The most of a log's end that is read for its last lines.
+const LIMIT: u64 = 64 << 10;
 
-fn set_live(path: Option<PathBuf>) {
-    *LIVE.lock().unwrap_or_else(|e| e.into_inner()) = path;
+/// The SDK workspace and the `build.log` in it while a build runs; empty between builds.
+static LIVE: Slot = Slot(Mutex::new(None));
+
+/// Where a running build's log is. The process has one ([`LIVE`]); tests make their own.
+struct Slot(Mutex<Option<Named>>);
+
+#[derive(Clone, PartialEq)]
+struct Named {
+    workspace: PathBuf,
+    log: PathBuf,
+}
+
+impl Slot {
+    fn set(&self, named: Option<Named>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = named;
+    }
+
+    fn get(&self) -> Option<Named> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn name(&self, workspace: PathBuf, log: PathBuf) -> LiveLog<'_> {
+        let named = Named { workspace, log };
+        self.set(Some(named.clone()));
+        LiveLog { slot: self, named }
+    }
+
+    fn tail(&self, lines: usize) -> Option<String> {
+        let named = self.get()?;
+        // The compiler runs mod code in this workspace, which can swap the log for a link or a
+        // pipe; read it only as the regular file the launcher's own import accepts.
+        super::workspace::regular_under(&named.workspace, &named.log).ok()?;
+        tail(&named.log, lines)
+    }
 }
 
 /// Names the log a running build writes for as long as it is held, and clears it on any exit
 /// path when dropped. Native builds are serialized (one at a time per launcher, under the build
-/// lock), so this single process-wide slot is never named by two builds at once.
+/// lock); a guard still clears only the name it set, never a later build's.
 #[must_use = "the live log is cleared when the guard drops"]
-pub(crate) struct LiveLog(());
+pub(crate) struct LiveLog<'a> {
+    slot: &'a Slot,
+    named: Named,
+}
 
-impl LiveLog {
-    pub(crate) fn name(path: PathBuf) -> Self {
-        set_live(Some(path));
-        Self(())
+impl LiveLog<'static> {
+    /// Names `log`, which must be a regular file under `workspace` to be read.
+    pub(crate) fn name(workspace: PathBuf, log: PathBuf) -> Self {
+        LIVE.name(workspace, log)
     }
 }
 
-impl Drop for LiveLog {
+impl Drop for LiveLog<'_> {
     fn drop(&mut self) {
-        set_live(None);
+        let mut slot = self.slot.0.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref() == Some(&self.named) {
+            *slot = None;
+        }
     }
 }
 
 /// The last `lines` non-empty lines the running build has written so far, read from the end of
 /// its log (at most 64 KiB). `None` when no build names a log or it holds no text yet: never an
-/// earlier build's log, so the pane shows only this attempt's lines.
+/// earlier build's log, so the pane shows only this attempt's lines. It reads the disk, so call
+/// it off the UI thread.
 pub fn live_tail(lines: usize) -> Option<String> {
-    let live = LIVE.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    live.and_then(|path| tail(&path, lines))
+    LIVE.tail(lines)
 }
 
-fn tail(path: &std::path::Path, lines: usize) -> Option<String> {
-    const LIMIT: u64 = 64 << 10;
-    let mut file = fs::File::open(path).ok()?;
+/// Opens `path` for reading without following a final link or waiting on a pipe, and only if
+/// the opened file is a regular one: a check before opening alone leaves a moment to swap it.
+fn open_regular(path: &Path) -> Option<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let file = options.open(path).ok()?;
+    file.metadata().ok()?.is_file().then_some(file)
+}
+
+fn tail(path: &Path, lines: usize) -> Option<String> {
+    let mut file = open_regular(path)?;
     let skip = file.metadata().ok()?.len().saturating_sub(LIMIT);
     file.seek(SeekFrom::Start(skip)).ok()?;
     let mut bytes = Vec::new();
     file.take(LIMIT).read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(&bytes);
-    // A read that starts mid-file starts mid-line: drop that partial first line.
+    // A read that starts mid-file starts mid-line: drop that partial first line, unless it is
+    // all there is (one line longer than the read), where its end is still the latest output.
+    let text = match text.find('\n') {
+        Some(end) if skip > 0 => &text[end + 1..],
+        _ => &text[..],
+    };
     let kept: Vec<&str> = text
         .lines()
-        .skip(usize::from(skip > 0))
         .filter(|line| !line.trim().is_empty())
         .collect();
     (!kept.is_empty()).then(|| kept[kept.len().saturating_sub(lines)..].join("\n"))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_tail_keeps_the_last_lines_and_skips_blank_ones() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("build.log");
-        fs::write(&log, "a\n\nb\r\n   \nc\nd\n").unwrap();
-        assert_eq!(tail(&log, 2).as_deref(), Some("c\nd"));
-        assert_eq!(tail(&log, 10).as_deref(), Some("a\nb\nc\nd"));
-        fs::write(&log, "\n \n").unwrap();
-        assert_eq!(tail(&log, 3), None);
-        assert_eq!(tail(&dir.path().join("missing.log"), 3), None);
-    }
-
-    #[test]
-    fn the_guard_names_the_log_only_while_held() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("build.log");
-        fs::write(&log, "compiling\n").unwrap();
-        {
-            let _live = LiveLog::name(log.clone());
-            assert_eq!(live_tail(5).as_deref(), Some("compiling"));
-        }
-        assert_eq!(live_tail(5), None);
-    }
-
-    #[test]
-    fn a_long_log_is_read_from_its_end_without_its_partial_first_line() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("build.log");
-        let body: String = (0..20_000).map(|n| format!("line {n}\n")).collect();
-        fs::write(&log, body).unwrap();
-        assert_eq!(
-            tail(&log, 3).as_deref(),
-            Some("line 19997\nline 19998\nline 19999")
-        );
-    }
-}
+mod tests;

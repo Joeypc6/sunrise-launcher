@@ -347,7 +347,10 @@ fn run(
     let (mut child, errors) = start(command, cancellation, true, profile)?;
     let live = workspace.as_deref_mut().map(|workspace| {
         workspace.allow_worker();
-        super::live_log::LiveLog::name(workspace.work().join("build.log"))
+        super::live_log::LiveLog::name(
+            workspace.path().to_owned(),
+            workspace.work().join("build.log"),
+        )
     });
     let result = talk(&mut child, plan, on_mod, cancellation);
     drop(live);

@@ -184,9 +184,10 @@ impl Launcher {
         let error = stop
             .map(|stop| stop.error.as_str())
             .filter(|s| !s.is_empty());
-        // While it runs, the compiler's latest lines, read again on each repaint.
+        // While it runs, the compiler's latest lines as the output reader last found them.
         let live = (running && run.output_open).then(|| {
-            native_mods::live_tail(LIVE_LINES)
+            run.output
+                .clone()
                 .unwrap_or_else(|| tr("Waiting for the compiler's first lines…").to_owned())
         });
         let diagnostic = if live.is_some() {
@@ -241,46 +242,7 @@ impl Launcher {
                 }))
         });
         // While it runs: show or hide the compiler's output as it comes.
-        let output = running.then(|| {
-            let label = if run.output_open {
-                tr("Hide output")
-            } else {
-                tr("Show output")
-            };
-            button("build-output", label).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                let Some(run) = &mut this.mods_state.build else {
-                    return;
-                };
-                run.output_open = !run.output_open;
-                // At most one repaint loop: reopening while one still runs reuses it.
-                if run.output_open && !run.output_polling {
-                    run.output_polling = true;
-                    // Repaint while it shows, so new lines appear without other news.
-                    cx.spawn(async move |this, cx| loop {
-                        cx.background_executor().timer(LIVE_REFRESH).await;
-                        let Ok(open) = this.update(cx, |this, cx| {
-                            let Some(run) = this.mods_state.build.as_mut() else {
-                                return false;
-                            };
-                            let open = run.output_open && run.running();
-                            if open {
-                                cx.notify();
-                            } else {
-                                run.output_polling = false;
-                            }
-                            open
-                        }) else {
-                            break;
-                        };
-                        if !open {
-                            break;
-                        }
-                    })
-                    .detach();
-                }
-                cx.notify();
-            }))
-        });
+        let output = running.then(|| Self::build_output_button(run.output_open, cx));
         // Managed Play only offers the log of this attempt, never the latest on disk.
         let log = (!running
             && (run.details || stop.is_some())
@@ -451,6 +413,70 @@ impl Launcher {
             }))
             .child(foot);
         Some(crate::sheets::frame("build-window", 600., body, cx))
+    }
+
+    /// Show output / Hide output, while a build runs.
+    fn build_output_button(open: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let label = if open {
+            tr("Hide output")
+        } else {
+            tr("Show output")
+        };
+        button("build-output", label).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            let Some(run) = &mut this.mods_state.build else {
+                return;
+            };
+            run.output_open = !run.output_open;
+            if run.output_open {
+                Self::read_build_output(run, cx);
+            }
+            cx.notify();
+        }))
+    }
+
+    /// Reads the compiler's latest lines off the UI thread, now and every [`LIVE_REFRESH`],
+    /// while `run` shows them. At most one reader per build: reopening reuses a running one.
+    fn read_build_output(run: &mut Run, cx: &mut Context<Self>) {
+        if run.output_reader.is_some() {
+            return;
+        }
+        let token = std::sync::Arc::new(());
+        run.output_reader = Some(token.clone());
+        cx.spawn(async move |this, cx| loop {
+            let text = cx
+                .background_executor()
+                .spawn(async { native_mods::live_tail(LIVE_LINES) })
+                .await;
+            let Ok(more) = this.update(cx, |this, cx| {
+                let Some(run) = this.mods_state.build.as_mut() else {
+                    return false;
+                };
+                // Another build's run, or a newer reader for this one: leave it alone.
+                if !run
+                    .output_reader
+                    .as_ref()
+                    .is_some_and(|reader| std::sync::Arc::ptr_eq(reader, &token))
+                {
+                    return false;
+                }
+                if !(run.output_open && run.running()) {
+                    run.output_reader = None;
+                    return false;
+                }
+                if run.output != text {
+                    run.output = text;
+                    cx.notify();
+                }
+                true
+            }) else {
+                break;
+            };
+            if !more {
+                break;
+            }
+            cx.background_executor().timer(LIVE_REFRESH).await;
+        })
+        .detach();
     }
 
     /// One mod's line: its picture, its name and version, and where it stands.
