@@ -700,7 +700,9 @@ pub fn newer_than(base: &str, installed: &[String]) -> Option<String> {
 /// The installed version `bundles` built on Sunrise `revision` with horizon-mixins `mixins`
 /// become: `native-<7 digits of the revision>-<12 hex digits>`. The two targets' keys never mix:
 /// a server build salts its hash, so it is another version than the client build of the same
-/// mods.
+/// mods. Nor do a set's builds with and without `left_out`: a build leaving mods out salts its
+/// hash with their ids, so it never stands in for the whole set (a whole set's version is the
+/// one launchers before this kept).
 pub fn version_for(
     revision: &str,
     mixins: &str,
@@ -708,6 +710,7 @@ pub fn version_for(
     target: Target,
     platform: Option<&str>,
     bundles: &[Bundle],
+    left_out: &[LeftOut],
 ) -> Result<String, String> {
     let mut hash = Sha256::new();
     let (cargo_profile, configs) = profile.cargo();
@@ -725,6 +728,16 @@ pub fn version_for(
         hash.update([0]);
     }
     hash_bundles(&mut hash, bundles).map_err(|e| e.to_string())?;
+    if !left_out.is_empty() {
+        let mut ids: Vec<&str> = left_out.iter().map(|left| left.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        hash.update(b"left out\0");
+        for id in ids {
+            hash.update(id.as_bytes());
+            hash.update([0]);
+        }
+    }
     let key: String = hash.finalize()[..6]
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -1843,6 +1856,7 @@ fn pipeline(
         target,
         platform_key(developer, platform, origin).as_deref(),
         &requested,
+        &left_out,
     )?;
     // Kept beside the build once it is installed or used again: the fast path's key for it.
     let inputs = || {
@@ -3922,6 +3936,40 @@ mod tests {
         assert!(bundles(&many.join("notes")).is_err());
     }
 
+    /// A build that leaves a mod out is another version than the whole set's. `pipeline` names
+    /// both from every requested mod (`requested`), so before, they shared one: once the reduced
+    /// build was installed, a plan of the whole set found it under its own version and said it
+    /// was up to date, without the mod.
+    #[test]
+    fn a_build_that_leaves_a_mod_out_never_has_the_whole_sets_version() {
+        let d = dir("reduced-version");
+        write_native(&d.join("alpha"), "alpha", A, B);
+        write_native(&d.join("beta"), "beta", A, B);
+        let requested = bundles(&d).unwrap();
+        let skip = [LeftOut::new(&requested[1], isolate::Why::DidNotBuild)];
+        let version = |skip: &[LeftOut]| {
+            // As `pipeline` names a build: every requested mod, and the mods this attempt leaves out.
+            let (left_out, kept, _) = kept_mods(&requested, skip, side_of(Target::Client));
+            assert_eq!(kept.len(), 2 - skip.len());
+            version_for(
+                A,
+                B,
+                Profile::Optimized,
+                Target::Client,
+                None,
+                &requested,
+                &left_out,
+            )
+            .unwrap()
+        };
+        let whole = version(&[]);
+        let reduced = version(&skip);
+        assert_ne!(reduced, whole, "the reduced build has its own version");
+        assert_eq!(version(&skip), reduced, "the same reduced build again");
+        assert_eq!(version(&[]), whole);
+        let _ = fs::remove_dir_all(d);
+    }
+
     /// Which mods a build keeps turns on each one's uses table: a repack that only adds, drops or
     /// changes the table is another build, so the installed one (and the mods it left out) is
     /// never reused for it; the same table again is the same build.
@@ -3938,6 +3986,7 @@ mod tests {
                 Target::Client,
                 None,
                 &bundles(&d).unwrap(),
+                &[],
             )
             .unwrap()
         };
@@ -3958,6 +4007,7 @@ mod tests {
             Target::Client,
             None,
             &bundles(&d).unwrap(),
+            &[],
         );
         assert!(
             unreadable.is_err(),
@@ -4098,6 +4148,7 @@ mod tests {
             Target::Client,
             None,
             &bundles(&out).unwrap(),
+            &[],
         )
         .unwrap();
         fs::write(path, b"changed").unwrap();
@@ -4109,7 +4160,8 @@ mod tests {
                 Profile::Optimized,
                 Target::Client,
                 None,
-                &bundles(&out).unwrap()
+                &bundles(&out).unwrap(),
+                &[]
             )
             .unwrap()
         );
@@ -4182,6 +4234,7 @@ mod tests {
                 Target::Client,
                 None,
                 &bundles(&d).unwrap(),
+                &[],
             )
             .unwrap()
         };
