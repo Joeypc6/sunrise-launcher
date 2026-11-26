@@ -2481,5 +2481,8 @@
   "{hours} hr": "{hours} hr",
   "{hours} hr {minutes} min": "{hours} hr {minutes} min",
   "Dev · finding builds…": "Dev · finding builds…",
-  "Dev · builds didn't load": "Dev · builds didn't load"
+  "Dev · builds didn't load": "Dev · builds didn't load",
+  "Edit profile": "Edit profile",
+  "Edit profile…": "Edit profile…",
+  "Rename it, move it to a group or pick another icon.": "Rename it, move it to a group or pick another icon."
 }
