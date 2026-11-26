@@ -93,6 +93,25 @@ fn profile_lock_reason(
     }
 }
 
+/// The heading above each profile in the sidebar: a group's name over its first profile.
+/// `instances::list` keeps the default profile first and sorts the rest by group, so only the
+/// rest are headed: a group the default profile has would otherwise seem to hold the ungrouped
+/// profiles under it. A blank group, as an earlier launcher saved an empty field, is no group.
+fn group_headings<'a>(groups: impl Iterator<Item = Option<&'a str>>) -> Vec<Option<String>> {
+    let mut before: Option<&str> = None;
+    groups
+        .enumerate()
+        .map(|(n, group)| {
+            let group = group.filter(|g| !g.trim().is_empty());
+            let heads = n > 0 && group.is_some() && group != before;
+            if n > 0 {
+                before = group;
+            }
+            heads.then(|| group.unwrap_or_default().to_owned())
+        })
+        .collect()
+}
+
 impl Launcher {
     pub(super) fn toggle_sidebar(&mut self) {
         let open = !self.settings.sidebar_expanded;
@@ -335,14 +354,9 @@ impl Launcher {
             .gap(px(4.))
             .overflow_y_scroll()
             .track_scroll(&crate::frame::scrolls("sidebar"));
-        // The list comes sorted by group (`instances::list`): each group's name heads its
-        // profiles, while the names show.
-        let mut group: Option<String> = None;
+        let headings = group_headings(self.instances.list.iter().map(|i| i.group.as_deref()));
         for (n, i) in self.instances.list.clone().into_iter().enumerate() {
-            // A blank group, as an earlier launcher saved an empty field, is no group.
-            let named = i.group.clone().filter(|g| !g.trim().is_empty());
-            if named.is_some() && named != group {
-                group = named;
+            if let Some(group) = headings[n].clone() {
                 list = list.child(
                     div()
                         .flex_none()
@@ -364,7 +378,7 @@ impl Launcher {
                                 .bg(rgb(p.chrome_muted))
                                 .opacity(0.5)
                         })
-                        .when(labelled, |d| d.child(group.clone().unwrap_or_default())),
+                        .when(labelled, |d| d.child(group)),
                 );
             }
             let on = selected.as_ref() == Some(&i.id);
@@ -683,6 +697,20 @@ mod tests {
         assert_eq!(rail_width(1.), 204.);
         assert_eq!(label_opacity(0.2), 0.);
         assert_eq!(label_opacity(1.), 1.);
+    }
+
+    #[test]
+    fn groups_head_their_first_profile_and_the_pinned_default_heads_none() {
+        let heads = |groups: &[Option<&str>]| group_headings(groups.iter().copied());
+        let a = || Some("A".to_owned());
+        assert_eq!(
+            heads(&[None, None, Some("A"), Some("A"), Some("B")]),
+            [None, None, a(), None, Some("B".to_owned())]
+        );
+        // The default profile in a group, then ungrouped ones: no heading would cover them.
+        assert_eq!(heads(&[Some("A"), None, Some("A")]), [None, None, a()]);
+        // A blank group is no group.
+        assert_eq!(heads(&[None, Some(" "), Some("A")]), [None, None, a()]);
     }
 
     #[test]
