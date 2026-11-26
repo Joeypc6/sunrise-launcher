@@ -232,6 +232,12 @@ impl Launcher {
         };
         if !c.eula {
             c.eula_missing = true;
+            // The box is the form's last line, under the fold in a small window: bring it up
+            // to where the footer's message points.
+            // (`Scrollbar::page("host-create")` gives the form its handle.)
+            if let Some(body) = crate::frame::drawn_scroll("host-create") {
+                body.scroll_to_bottom();
+            }
             return;
         }
         let Some(c) = self.servers.create.as_ref() else {
