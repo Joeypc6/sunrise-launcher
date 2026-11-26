@@ -318,7 +318,7 @@ impl Facts {
             enabled: location_allows_action(
                 self.located,
                 busy && !matches!(main, Main::RegistryInstall(_, true)),
-            ) && main != Main::SignIn,
+            ),
             said,
             failed,
             act,
@@ -347,8 +347,8 @@ impl Main {
             Main::ChangingMods => tr("Changing mods…").into(),
             Main::RegistryInstall(stage, _) => crate::mods_page::install::stage_label(stage).into(),
             Main::Stop => tr("Stop game").into(),
-            // Signed out, Play stays where it is and can't be pressed; signing in is the account
-            // chip's job.
+            // Signed out, Play keeps its name: the account chip is the one "Sign in with
+            // Microsoft". Pressing it signs in first and then plays (`play_game`).
             Main::SignIn => tr("Play").into(),
             Main::Install => tr("Install and play").into(),
             Main::Play => tr("Play").into(),
@@ -356,7 +356,8 @@ impl Main {
         }
     }
 
-    /// Why Play can't be pressed, said only as its tooltip: no line is added to the page.
+    /// What Play does first, or why it can't be pressed, said only as its tooltip: no line is
+    /// added to the page.
     pub(crate) fn tooltip(self) -> Option<SharedString> {
         match self {
             Main::SignIn => Some(tr("Sign in to play").into()),
