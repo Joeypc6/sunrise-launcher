@@ -1,0 +1,1 @@
+Mod API: a block tint source that reads per-position data (the block entity's colour), for a dyed block in the world
