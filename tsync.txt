@@ -1,0 +1,1 @@
+Client: build the world's data-pack tables from the server's synced tags (client_world_tables is always None)
