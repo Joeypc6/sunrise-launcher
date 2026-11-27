@@ -1,0 +1,1 @@
+Mod API: BlockClass::Fallable, so a mod can ask whether a block state falls (instanceof Fallable)
