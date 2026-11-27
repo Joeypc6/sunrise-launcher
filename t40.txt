@@ -1,0 +1,1 @@
+LAN: host block placement and pressure plates ignore a dead guest's body during its 20 death ticks
