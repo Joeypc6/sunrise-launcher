@@ -1,0 +1,1 @@
+Spawners never spawn an entity that isn't in the mob table (the ender dragon, and every non-mob type), though vanilla's BaseSpawner creates any entity type
