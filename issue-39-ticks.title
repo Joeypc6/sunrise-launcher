@@ -1,0 +1,1 @@
+Single player: mod block entities never tick on the integrated server since the gameplay split (#6527)
