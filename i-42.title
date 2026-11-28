@@ -1,0 +1,1 @@
+Mod API: re-run a spawn placement predicate under a light override from inside mob_spawn_placement_check (a spawner that ignores light)
