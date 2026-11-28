@@ -1,1 +1,1 @@
-Mod API (client): an item's sprites from its default model, and the pixels of a sprite outside the blocks atlas
+Mod API (client): the sprites an item's default model draws with (item_sprites, like block_sprites)
