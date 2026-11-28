@@ -1,0 +1,1 @@
+Mod API (client): draw many GUI items in one call, or keep a batch across frames (a mod's item draws cost ~4 µs each)
