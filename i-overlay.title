@@ -1,0 +1,1 @@
+Windows: building the mod content root hard-links every base file (20-50 s cold start)
