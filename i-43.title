@@ -1,0 +1,1 @@
+Performance: 45,000 data-pack recipes cost +1.5 GiB resident memory outside the allocator, +10 s world join and ~13 s of untraced startup
